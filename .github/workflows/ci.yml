@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  solidity-reference:
+    name: Foundry Contracts Test & Invariants
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Build contracts
+        run: forge build --sizes
+
+      - name: Run unit & invariant test suite
+        run: forge test -vvv
+
+  stylus-wasm:
+    name: Stylus Rust WASM Vault (Unit, Invariants, Clippy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-shield-vault
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - name: Cargo Unit Tests (Pure Risk Engine)
+        run: cargo test --lib -- risk_engine
+
+      - name: Cargo Clippy (-D warnings)
+        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Check WASM compilation
+        run: cargo build --target wasm32-unknown-unknown --release
+
+  frontend:
+    name: Next.js Frontend Verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and Lint
+        run: npm run build

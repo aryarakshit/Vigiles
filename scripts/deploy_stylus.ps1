@@ -1,6 +1,6 @@
 # AgentShield Stylus Deployment Script for Robinhood Chain Testnet
 param (
-    [string]$RpcUrl = "https://rpc.robinhood.com/testnet",
+    [string]$RpcUrl = "https://rpc.testnet.chain.robinhood.com",
     [string]$PrivateKey = $env:PRIVATE_KEY
 )
 

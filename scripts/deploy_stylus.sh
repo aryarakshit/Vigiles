@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RPC_URL="${RPC_URL:-https://rpc.robinhood.com/testnet}"
+RPC_URL="${RPC_URL:-https://rpc.testnet.chain.robinhood.com}"
 PRIVATE_KEY="${PRIVATE_KEY:-}"
 
 echo "========================================================"
@@ -23,11 +23,10 @@ WASM_SIZE=$(wc -c < "$WASM_PATH")
 echo "WASM binary successfully created: $WASM_PATH ($WASM_SIZE bytes)"
 
 # 2. Deploy using cargo-stylus
-echo "[2/3] Deploying to Robinhood Chain Testnet ($RPC_URL)..."
+echo "[2/3] Deploying to Robinhood Chain Testnet ($RPC_URL, Chain ID: 46630)..."
 if [ -n "$PRIVATE_KEY" ]; then
     cargo stylus deploy --endpoint "$RPC_URL" --private-key "$PRIVATE_KEY"
+    echo "[3/3] Deployment complete. AgentShield is live on Robinhood Chain!"
 else
-    echo "Dry run: Run with PRIVATE_KEY set to broadcast on-chain."
+    echo "[3/3] Dry run successful. WASM artifact verified. Run with PRIVATE_KEY set to broadcast on-chain."
 fi
-
-echo "[3/3] Deployment complete. AgentShield is live!"

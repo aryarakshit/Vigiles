@@ -13,11 +13,20 @@ mini-alloc = "0.4.2"
 export-abi = ["stylus-sdk/export-abi"]
 contract-client-gen = []
 
+[dev-dependencies]
+stylus-sdk = { version = "0.10.9", features = ["stylus-test"] }
+
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "agent-shield-vault"
+path = "src/main.rs"
+required-features = ["export-abi"]
 
 [profile.release]
 codegen-units = 1
 opt-level = "z"
 lto = true
 panic = "abort"
+strip = true

@@ -2,32 +2,42 @@
 pragma solidity ^0.8.20;
 
 /// @title IAgentVault
-/// @notice Interface for AgentShield: On-chain Risk-Management Vault for AI Agents
+/// @notice Interface for AgentShield: On-chain Risk-Management Vault for AI Agents (v2)
 interface IAgentVault {
     // --- Events ---
     event Deposit(address indexed user, address indexed token, uint256 amount);
     event Withdraw(address indexed user, address indexed token, uint256 amount);
-    event SessionKeyCreated(
-        address indexed user,
-        address indexed agent,
-        uint256 max_spend_limit,
-        uint256 daily_limit,
-        uint256 expiry
-    );
-    event SessionKeyRevoked(address indexed user, address indexed agent);
-    event TradeExecuted(
-        address indexed user,
-        address indexed agent,
-        address indexed token_in,
-        uint256 amount_in,
-        address dex_router
-    );
-    event TokenWhitelistUpdated(
+    event SessionKeyCreated(address indexed user, address indexed agent, uint256 expiry, uint256 epoch);
+    event SessionKeyRevoked(address indexed user, address indexed agent, uint256 epoch);
+    event TokenPolicyUpdated(
         address indexed user,
         address indexed agent,
         address indexed token,
-        bool allowed
+        bool allowed,
+        uint256 perTradeCap,
+        uint256 dailyCap,
+        uint256 epoch
     );
+    event AdapterPolicyUpdated(
+        address indexed user,
+        address indexed agent,
+        address indexed adapter,
+        bool allowed,
+        uint256 epoch
+    );
+    event TradeExecuted(
+        address indexed user,
+        address indexed agent,
+        address indexed tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 spent,
+        uint256 received,
+        address adapter
+    );
+    event PriceFeedUpdated(address indexed token, address feed);
+    event SequencerFeedUpdated(address feed);
+    event SessionSlippageUpdated(address indexed user, address indexed agent, uint256 maxSlippageBps);
 
     // --- Custom Errors ---
     error Unauthorized();
@@ -36,47 +46,74 @@ interface IAgentVault {
     error SpendLimitExceeded();
     error DailyLimitExceeded();
     error TokenNotAllowed();
+    error AdapterNotAllowed();
     error InsufficientBalance();
     error ZeroAddress();
     error ZeroAmount();
     error ReentrancyError();
     error SafeMathError();
     error ExternalCallFailed();
+    error OverSpent();
+    error InsufficientOutput();
+    error StalePriceFeed();
+    error SequencerDown();
+    error GracePeriodNotOver();
+    error SlippageExceeded();
+    error InvalidCap();
+    error InvalidAdapter();
+    error InvalidToken();
 
     // --- Core User Functions ---
-    function deposit_eth() external payable;
-    function deposit_erc20(address token, uint256 amount) external;
-    function withdraw_eth(uint256 amount) external;
-    function withdraw_erc20(address token, uint256 amount) external;
-    function create_session_key(
+    function depositEth() external payable;
+    function depositErc20(address token, uint256 amount) external;
+    function withdrawEth(uint256 amount) external;
+    function withdrawErc20(address token, uint256 amount) external;
+    function createSessionKey(
         address agent,
-        uint256 max_spend_limit,
-        uint256 daily_limit,
         uint256 expiry,
-        address[] calldata allowed_tokens_list
+        address[] calldata tokens,
+        uint256[] calldata perTradeCaps,
+        uint256[] calldata dailyCaps,
+        address[] calldata adapters
     ) external;
-    function set_token_whitelist(address agent, address token, bool allowed) external;
-    function revoke_session_key(address agent) external;
+    function setTokenPolicy(
+        address agent,
+        address token,
+        bool allowed,
+        uint256 perTradeCap,
+        uint256 dailyCap
+    ) external;
+    function setAdapter(address agent, address adapter, bool allowed) external;
+    function revokeSessionKey(address agent) external;
+    function setSessionSlippage(address agent, uint256 maxSlippageBps) external;
 
     // --- Core AI Agent Function ---
-    function execute_trade(
+    function executeTrade(
         address user,
-        address token_address,
-        uint256 amount,
-        address dex_router,
-        bytes calldata call_data
-    ) external;
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address adapter,
+        bytes calldata data
+    ) external returns (uint256 received);
 
     // --- View Functions ---
-    function get_balance(address user, address token) external view returns (uint256);
-    function is_session_active(address user, address agent) external view returns (bool);
-    function is_token_allowed(address user, address agent, address token) external view returns (bool);
-    function get_session_limits(address user, address agent) external view returns (
-        bool is_active,
-        uint256 max_spend_limit,
-        uint256 daily_limit,
-        uint256 spent_today,
-        uint256 last_reset_timestamp,
-        uint256 expiry
+    function getBalance(address user, address token) external view returns (uint256);
+    function getSession(address user, address agent) external view returns (bool active, uint256 expiry, uint256 epoch);
+    function getTokenPolicy(address user, address agent, address token) external view returns (
+        bool allowed,
+        uint256 perTradeCap,
+        uint256 dailyCap,
+        uint256 availableNow
     );
+    function isAdapterAllowed(address user, address agent, address adapter) external view returns (bool);
+    function sessionSlippage(address user, address agent) external view returns (uint256);
+    function getPriceFloor(
+        address user,
+        address agent,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) external view returns (uint256 minAmountOutFloor);
 }
