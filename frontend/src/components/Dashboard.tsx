@@ -87,7 +87,16 @@ function Hero() {
               </React.Fragment>
             ))}
             <dt className="text-ink/55">Deployed</dt>
-            <dd className="font-semibold text-right">{DEPLOYMENT.agentVault ? <TxLink hash={DEPLOYMENT.deployTx} label="deploy" /> : <span className="text-accent">Pending</span>}</dd>
+            <dd className="font-semibold text-right">
+              {DEPLOYMENT.agentVault ? (
+                <>
+                  {DEPLOYMENT.deployedAt && <span className="tabular-nums mr-2">{DEPLOYMENT.deployedAt.slice(0, 10)}</span>}
+                  <TxLink hash={DEPLOYMENT.deployTx} label="deploy" />
+                </>
+              ) : (
+                <span className="text-accent">Pending</span>
+              )}
+            </dd>
           </dl>
 
           {/* last refusal: the signal, in the signal colour */}
