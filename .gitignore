@@ -37,3 +37,7 @@ Temp/
 # Local tooling
 .claude/
 frontend/tsconfig.tsbuildinfo
+
+# Local deployer key — never commit
+key.txt
+*.key
