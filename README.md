@@ -101,6 +101,9 @@ Requirements: Rust nightly with `rust-src` + `wasm32-unknown-unknown`; `cargo-st
 
 ## Three-minute demo
 
+Full shot list and narration in [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md); submission write-up in [`docs/SUBMISSION.md`](docs/SUBMISSION.md).
+
+
 1. **Deposit** 25 AAPL into the vault (dashboard, panel 01).
 2. **Grant** a session key to the in-browser agent: AAPL + TSLA, 5 per trade, 20 per day, TSLA max holding 12 (panel 02). Read the *worst case per day* figure.
 3. **Apply guardrails**: 5 trades/hour, 24 h heartbeat. Toggle *NYSE hours* to see the 24-hour strip and the live "vault says now" verdict flip.
