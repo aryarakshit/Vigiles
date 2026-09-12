@@ -75,11 +75,22 @@ export function CageBuilder() {
     return ok;
   };
 
+  // Position caps are their own transaction (setPositionCap), keyed to the current epoch.
+  const setCaps = async (current: Partial<Record<TokenSymbol, bigint>>) => {
+    for (const t of TOKEN_LIST) {
+      if (!rows[t.symbol].on) continue;
+      const want = toWei(rows[t.symbol].cap);
+      if (want !== (current[t.symbol] ?? 0n)) {
+        await go(`Position cap ${t.symbol}`, () => api!.setPositionCap(agent.address, tokenAddress(t.symbol), want));
+      }
+    }
+  };
+
   const grant = async () => {
     const on = TOKEN_LIST.filter((t) => rows[t.symbol].on);
     if (!on.length) return;
     const expiry = now + Math.max(1, parseInt(days || "1", 10)) * 86400;
-    await go("Grant session key", () =>
+    const ok = await go("Grant session key", () =>
       api!.createSessionKey(
         agent.address,
         expiry,
@@ -89,18 +100,16 @@ export function CageBuilder() {
         [adapterAddress],
       ),
     );
+    if (!ok) return;
+    // A new epoch starts with no caps, so the "Max hold" column is applied right away.
+    await setCaps({});
+    await refresh();
   };
 
   const applyGuards = async () => {
     const ok = await go("Apply guardrails", () => api!.setSessionGuards(agent.address, draft));
     if (!ok) return;
-    for (const t of TOKEN_LIST) {
-      if (!rows[t.symbol].on) continue;
-      const want = toWei(rows[t.symbol].cap);
-      if (want !== snap.caps[t.symbol]) {
-        await go(`Position cap ${t.symbol}`, () => api!.setPositionCap(agent.address, tokenAddress(t.symbol), want));
-      }
-    }
+    await setCaps(snap.caps);
     await refresh();
   };
 
