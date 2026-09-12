@@ -4,14 +4,15 @@
   "chainName": "Robinhood Chain Testnet",
   "rpcUrl": "https://rpc.testnet.chain.robinhood.com",
   "explorerUrl": "https://explorer.testnet.chain.robinhood.com",
-  "agentVault": null,
-  "agentVaultDeployTx": null,
-  "swapAdapter": null,
+  "agentVault": "0xa3c88463bf249bda1c92ac75fe7c3f77cf989be0",
+  "agentVaultDeployTx": "0x742565548dc5ab56f74d34a49c21820a81c0a189c218c40c267a38402b5f1e14",
+  "swapAdapter": "0x0FadfB6E4E5bD9F1B253CD3aFAaA0B388B483551",
   "tokens": {
-    "AAPL": null,
-    "TSLA": null,
-    "NVDA": null
+    "AAPL": "0x53a5D23a41AF3d28bD489Be0240A3E952F0a4D4D",
+    "TSLA": "0x970B5FDb8F7DFbc68215836293a00FbeE9246F86",
+    "NVDA": "0xbd91bc7e1a2cEd4287ACF3C7B8077EE1088159df"
   },
-  "deployer": null,
-  "deployedAt": null
+  "deployer": "0xCAa231aF5cE4c827FF7Fc752B6e5F740426a639c",
+  "deployedAt": "2026-09-12T20:56:24.002193+00:00",
+  "agentVaultActivateTx": "0xd4045e4d31508f3b9c7dbfff7168095a7b216e6a921e15535a15c420674eb694"
 }

@@ -13,7 +13,7 @@
 #      ArbWasm.activateProgram with state overrides (= `cargo stylus check`),
 #      then CREATE with the 43-byte prelude and the real activateProgram tx.
 #
-# Requirements: Rust nightly (rust-src, wasm32 target), Foundry (`cast`),
+# Requirements: Rust nightly (rust-src, wasm32 target), Node (viem via mcp/node_modules),
 # Python 3 with `brotli`, Binaryen `wasm-opt` (npm i -g binaryen).
 # The private key file is passed by path; nothing in this script prints it.
 set -euo pipefail

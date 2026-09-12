@@ -86,6 +86,18 @@ Three bugs found on the way and fixed: the `#[public]` macro was exporting the p
 
 ## Deployment
 
+### Live on Robinhood Chain testnet (chain id 46630)
+
+| Contract | Address |
+|---|---|
+| **AgentVault (Stylus, Rust)** | [`0xa3c88463bf249bda1c92ac75fe7c3f77cf989be0`](https://explorer.testnet.chain.robinhood.com/address/0xa3c88463bf249bda1c92ac75fe7c3f77cf989be0) — [deploy tx](https://explorer.testnet.chain.robinhood.com/tx/0x742565548dc5ab56f74d34a49c21820a81c0a189c218c40c267a38402b5f1e14) · [activation tx](https://explorer.testnet.chain.robinhood.com/tx/0xd4045e4d31508f3b9c7dbfff7168095a7b216e6a921e15535a15c420674eb694) |
+| Swap adapter (mock venue) | [`0x0FadfB6E4E5bD9F1B253CD3aFAaA0B388B483551`](https://explorer.testnet.chain.robinhood.com/address/0x0FadfB6E4E5bD9F1B253CD3aFAaA0B388B483551) |
+| AAPL (tokenized stock mock) | [`0x53a5D23a41AF3d28bD489Be0240A3E952F0a4D4D`](https://explorer.testnet.chain.robinhood.com/address/0x53a5D23a41AF3d28bD489Be0240A3E952F0a4D4D) |
+| TSLA (tokenized stock mock) | [`0x970B5FDb8F7DFbc68215836293a00FbeE9246F86`](https://explorer.testnet.chain.robinhood.com/address/0x970B5FDb8F7DFbc68215836293a00FbeE9246F86) |
+| NVDA (tokenized stock mock) | [`0xbd91bc7e1a2cEd4287ACF3C7B8077EE1088159df`](https://explorer.testnet.chain.robinhood.com/address/0xbd91bc7e1a2cEd4287ACF3C7B8077EE1088159df) |
+
+Deployed 2026-09-12 by `0xCAa231aF5cE4c827FF7Fc752B6e5F740426a639c`. Verified on-chain end to end: deposit → session key → guardrails → one admitted trade → six refusals (`TokenNotAllowed`, `SpendLimitExceeded`, `AdapterNotAllowed`, `MissingIntent`, `PositionCapExceeded`, `VelocityLimitExceeded`) → revoke → `SessionKeyInactive`.
+
 Addresses live in **[`deployments/robinhood-testnet.json`](deployments/robinhood-testnet.json)** — the single source of truth read by the dashboard and the MCP server. If `agentVault` is `null` there, the vault is not deployed yet and the dashboard runs in a clearly-labelled simulation with identical rules.
 
 ```bash

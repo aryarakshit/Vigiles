@@ -16,7 +16,7 @@ Session keys, not wallet keys — a Stylus (Rust) vault that cages AI trading ag
 
 - Live dashboard: https://vigilesprj.vercel.app
 - Code: https://github.com/aryarakshit/Vigiles
-- Vault on Robinhood Chain testnet: ⟨explorer link to `agentVault` from `deployments/robinhood-testnet.json`⟩
+- Vault on Robinhood Chain testnet: https://explorer.testnet.chain.robinhood.com/address/0xa3c88463bf249bda1c92ac75fe7c3f77cf989be0 (activation tx: https://explorer.testnet.chain.robinhood.com/tx/0xd4045e4d31508f3b9c7dbfff7168095a7b216e6a921e15535a15c420674eb694)
 - Demo video: ⟨link⟩
 - MCP server: https://github.com/aryarakshit/Vigiles/tree/main/mcp
 
@@ -63,7 +63,7 @@ Session keys with spend caps exist (ERC-7715, Safe modules). What doesn't: guard
 *(Be explicit — the T&C permit existing work that is substantially developed during the event, and disqualify misleading claims.)*
 
 - **Before (as "AgentShield"):** a v2 scaffold — spend caps, whitelist, epoch revocation, balance-diff settlement, a Solidity twin with hostile-adapter and invariant tests, a mocked dashboard. It was not deployable (WASM over the size limit) and the frontend had no chain integration.
-- **During the buildathon:** the five agent-specific guards (window, velocity, position cap, heartbeat, intent receipts); the oracle floor ported to Stylus with per-user feeds; the size engineering that made the contract deployable; three security fixes; the real viem dashboard with attack scenarios and intent verifier; the MCP server on the official SDK; the Robinhood Chain deployment; ⟨anything else you ship before Oct 1⟩.
+- **During the buildathon:** the five agent-specific guards (window, velocity, position cap, heartbeat, intent receipts); the oracle floor ported to Stylus with per-user feeds; the size engineering that made the contract deployable; three security fixes; the real viem dashboard with attack scenarios and intent verifier; the MCP server on the official SDK; the Robinhood Chain deployment (2026-09-12) verified end to end on-chain; ⟨anything else you ship before Oct 1⟩.
 
 ## Team
 

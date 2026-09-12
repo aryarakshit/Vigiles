@@ -11,8 +11,8 @@ check  : compress the WASM exactly as cargo-stylus does (strip custom sections,
          returns (version, dataFee) the program is valid and activatable.
 deploy : CREATE the contract with the 43-byte EVM prelude, then send
          ArbWasm.activateProgram(address) with dataFee + 20 %. Prints the address
-         and both tx hashes. Uses `cast` (Foundry) for signing; the key file is
-         passed by path and never read by this script.
+         and both tx hashes. Signs with viem (scripts/stylus_send.mjs, payload on stdin —
+         the init code is too long for a Windows command line).
 
 Reference: stylus-tools 0.10.9 (core/deployment/prelude.rs, core/activation.rs).
 """
@@ -97,29 +97,29 @@ def main():
     key_file = os.path.abspath(a.key_path)
     initcode = "0x" + prelude(code).hex()
 
+    def send(to, data, value):
+        payload = json.dumps({"rpc": a.rpc, "keyPath": key_file, "to": to, "data": data, "value": str(value)})
+        out = subprocess.run(["node", os.path.join(os.path.dirname(os.path.abspath(__file__)), "stylus_send.mjs")], input=payload, capture_output=True, text=True)
+        if out.returncode != 0:
+            sys.exit(f"tx failed: {out.stderr[-800:]}")
+        rec = json.loads(out.stdout)
+        if rec.get("status") != "success":
+            sys.exit(f"receipt not successful: {rec}")
+        return rec
+
     print("deploying (CREATE)…")
-    out = subprocess.run(["cast", "send", "--rpc-url", a.rpc, "--keystore" if False else "--private-key", open(key_file).read().strip(), "--create", initcode, "--json"], capture_output=True, text=True)
-    if out.returncode != 0:
-        sys.exit(f"deploy tx failed: {out.stderr[-600:]}")
-    rec = json.loads(out.stdout)
-    address = rec.get("contractAddress"); deploy_tx = rec.get("transactionHash")
-    if not address or rec.get("status") not in ("0x1", 1, "1"):
-        sys.exit(f"deploy receipt not successful: {rec}")
-    print(f"deployed at {address}  tx {deploy_tx}")
+    rec = send(None, initcode, 0)
+    address = rec["contractAddress"]; deploy_tx = rec["transactionHash"]
+    print(f"deployed at {address}  tx {deploy_tx}  gas {rec['gasUsed']}")
 
     (res, err) = data_fee(a.rpc, code, address)
     if err:
         sys.exit(f"post-deploy fee check failed: {err}")
     fee = res[1]; value = fee * (100 + a.bump) // 100
     print(f"activating with {value / 1e18:.6f} ETH (data fee + {a.bump}%)…")
-    out = subprocess.run(["cast", "send", "--rpc-url", a.rpc, "--private-key", open(key_file).read().strip(), ARB_WASM, "activateProgram(address)", address, "--value", str(value), "--json"], capture_output=True, text=True)
-    if out.returncode != 0:
-        sys.exit(f"activation tx failed: {out.stderr[-600:]}")
-    rec = json.loads(out.stdout)
-    if rec.get("status") not in ("0x1", 1, "1"):
-        sys.exit(f"activation receipt not successful: {rec}")
-    print(f"activated  tx {rec.get('transactionHash')}")
-    print(json.dumps({"agentVault": address, "deployTx": deploy_tx, "activateTx": rec.get("transactionHash")}))
+    rec = send(ARB_WASM, "0x" + SEL_ACTIVATE + address[2:].rjust(64, "0"), value)
+    print(f"activated  tx {rec['transactionHash']}  gas {rec['gasUsed']}")
+    print(json.dumps({"agentVault": address, "deployTx": deploy_tx, "activateTx": rec["transactionHash"]}))
 
 if __name__ == "__main__":
     main()
