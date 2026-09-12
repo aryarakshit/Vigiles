@@ -14,3 +14,6 @@ build-std = ["std", "panic_abort"]
 
 [target.wasm32-unknown-unknown]
 rustflags = ["-Zunstable-options", "-Cpanic=immediate-abort"]
+# Note: the linker leaves padded LEBs (e.g. call_indirect table index 80 80 80 80 00)
+# that Nitro's Stylus validator rejects with "zero byte expected". Target-feature
+# flags do not change that; re-serialising with wasm-opt does (see scripts/deploy_stylus.sh).

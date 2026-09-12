@@ -1,98 +1,70 @@
 #!/usr/bin/env bash
 # Vigiles — build, check and deploy the Stylus vault to Robinhood Chain testnet.
 #
-#   ./scripts/deploy_stylus.sh                 # build + `cargo stylus check` (dry run, no key needed)
-#   PRIVATE_KEY_PATH=./key.txt ./scripts/deploy_stylus.sh   # build + check + deploy + activate
+#   ./scripts/deploy_stylus.sh                              # build + on-chain activation check (no key needed)
+#   PRIVATE_KEY_PATH=./key.txt ./scripts/deploy_stylus.sh  # build + check + deploy + activate + record manifest
 #
-# Requirements:
-#   - Rust nightly with rust-src + wasm32 target (see vigiles-vault/.cargo/config.toml)
-#   - cargo-stylus (`cargo install cargo-stylus`), OR Docker (falls back to the official image)
-#   - A funded key on Robinhood Chain testnet; the file must contain only the hex key.
+# No cargo-stylus or Docker required. The pipeline is the same one cargo-stylus
+# runs, done directly:
+#   1. cargo +nightly build (panic=immediate-abort, see vigiles-vault/.cargo/config.toml)
+#   2. wasm-opt -Oz re-serialises the module (canonical LEBs — Nitro rejects the
+#      linker's padded ones) and shrinks it
+#   3. scripts/stylus_raw.py: brotli-11 + EFF00000 prefix, eth_call
+#      ArbWasm.activateProgram with state overrides (= `cargo stylus check`),
+#      then CREATE with the 43-byte prelude and the real activateProgram tx.
 #
-# The private key file is passed to cargo-stylus by path and is never echoed.
+# Requirements: Rust nightly (rust-src, wasm32 target), Foundry (`cast`),
+# Python 3 with `brotli`, Binaryen `wasm-opt` (npm i -g binaryen).
+# The private key file is passed by path; nothing in this script prints it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VAULT_DIR="$ROOT/vigiles-vault"
 WASM="$VAULT_DIR/target/wasm32-unknown-unknown/release/vigiles_vault.wasm"
+OPT="$VAULT_DIR/target/wasm32-unknown-unknown/release/vigiles_vault.opt.wasm"
 MANIFEST="$ROOT/deployments/robinhood-testnet.json"
 
 RPC_URL="${RPC_URL:-https://rpc.testnet.chain.robinhood.com}"
 EXPLORER="${EXPLORER:-https://explorer.testnet.chain.robinhood.com}"
 PRIVATE_KEY_PATH="${PRIVATE_KEY_PATH:-}"
-CARGO_STYLUS_IMAGE="${CARGO_STYLUS_IMAGE:-offchainlabs/cargo-stylus-base:0.6.3}"
 
-# Pick the nightly toolchain name. Windows/GNU hosts install it under a triple-suffixed name.
-if rustup toolchain list | grep -q '^nightly-x86_64-pc-windows-gnu'; then
-  NIGHTLY="+nightly-x86_64-pc-windows-gnu"
-else
-  NIGHTLY="+nightly"
-fi
+if rustup toolchain list | grep -q '^nightly-x86_64-pc-windows-gnu'; then NIGHTLY="+nightly-x86_64-pc-windows-gnu"; else NIGHTLY="+nightly"; fi
 
-echo "== [1/4] Building WASM with panic=immediate-abort (nightly, build-std) =="
+echo "== [1/4] cargo build (nightly, build-std, immediate-abort) =="
 ( cd "$VAULT_DIR" && cargo $NIGHTLY build --release --target wasm32-unknown-unknown )
 [ -f "$WASM" ] || { echo "WASM not found at $WASM"; exit 1; }
-RAW=$(wc -c < "$WASM")
-echo "   raw wasm: $RAW bytes (limit 131072)"
-if command -v python >/dev/null 2>&1 && python -c "import brotli" 2>/dev/null; then
-  BR=$(python -c "import brotli;print(len(brotli.compress(open('$WASM','rb').read(),quality=11,lgwin=22)))")
-  echo "   brotli:   $BR bytes (EIP-170 limit 24576)"
-fi
 
-# Resolve a `cargo stylus` runner: native binary or Docker.
-run_stylus() {
-  if cargo stylus --version >/dev/null 2>&1; then
-    ( cd "$VAULT_DIR" && cargo stylus "$@" )
-  elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    local mounts=(-v "$VAULT_DIR:/src" -w /src)
-    [ -n "$PRIVATE_KEY_PATH" ] && mounts+=(-v "$(cd "$(dirname "$PRIVATE_KEY_PATH")" && pwd)/$(basename "$PRIVATE_KEY_PATH"):/key.txt:ro")
-    docker run --rm "${mounts[@]}" "$CARGO_STYLUS_IMAGE" cargo stylus "$@"
-  else
-    echo "Neither 'cargo stylus' nor a running Docker daemon is available."
-    echo "Install with:  cargo install cargo-stylus   (Linux/macOS)"
-    echo "or start Docker Desktop and re-run."
-    exit 1
-  fi
-}
-
-echo "== [2/4] cargo stylus check against $RPC_URL =="
-run_stylus check --wasm-file target/wasm32-unknown-unknown/release/vigiles_vault.wasm --endpoint "$RPC_URL"
+echo "== [2/4] wasm-opt -Oz (re-serialise + shrink) =="
+command -v wasm-opt >/dev/null || { echo "wasm-opt missing: npm i -g binaryen"; exit 1; }
+wasm-opt -Oz --enable-bulk-memory-opt --enable-sign-ext --enable-mutable-globals --enable-nontrapping-float-to-int -o "$OPT" "$WASM"
+echo "   raw $(wc -c < "$WASM") B -> opt $(wc -c < "$OPT") B"
 
 if [ -z "$PRIVATE_KEY_PATH" ]; then
+  echo "== [3/4] on-chain activation check =="
+  python "$ROOT/scripts/stylus_raw.py" check --wasm "$OPT" --rpc "$RPC_URL"
   echo "== Dry run complete. Set PRIVATE_KEY_PATH=<file> to deploy. =="
   exit 0
 fi
 
-echo "== [3/4] Deploying + activating on Robinhood Chain (46630) =="
-KEY_ARG="$PRIVATE_KEY_PATH"
-if ! cargo stylus --version >/dev/null 2>&1; then KEY_ARG="/key.txt"; fi
-OUT=$(run_stylus deploy \
-  --wasm-file target/wasm32-unknown-unknown/release/vigiles_vault.wasm \
-  --endpoint "$RPC_URL" \
-  --private-key-path "$KEY_ARG" \
-  --no-verify 2>&1 | tee /dev/stderr)
+echo "== [3/4] check + deploy + activate =="
+OUT=$(python "$ROOT/scripts/stylus_raw.py" deploy --wasm "$OPT" --rpc "$RPC_URL" --key-path "$PRIVATE_KEY_PATH" | tee /dev/stderr)
+JSON=$(echo "$OUT" | grep -E '^\{"agentVault"' | tail -1)
+[ -n "$JSON" ] || { echo "deploy did not report an address"; exit 1; }
 
-ADDR=$(echo "$OUT" | grep -oiE 'deployed code at address:? *0x[0-9a-fA-F]{40}' | grep -oE '0x[0-9a-fA-F]{40}' | tail -1 || true)
-TX=$(echo "$OUT" | grep -oiE 'deployment tx hash:? *0x[0-9a-fA-F]{64}' | grep -oE '0x[0-9a-fA-F]{64}' | tail -1 || true)
-
-if [ -z "$ADDR" ]; then
-  echo "Could not parse the deployed address from cargo-stylus output; update $MANIFEST by hand."
-  exit 1
-fi
-
-echo "== [4/4] Recording deployment =="
-python - "$MANIFEST" "$ADDR" "$TX" <<'PY'
+echo "== [4/4] recording deployment =="
+python - "$MANIFEST" "$JSON" <<'PY'
 import json, sys, datetime
-path, addr, tx = sys.argv[1], sys.argv[2], sys.argv[3] or None
+path, blob = sys.argv[1], json.loads(sys.argv[2])
 m = json.load(open(path))
-m["agentVault"] = addr
-m["agentVaultDeployTx"] = tx
+m["agentVault"] = blob["agentVault"]
+m["agentVaultDeployTx"] = blob["deployTx"]
+m["agentVaultActivateTx"] = blob["activateTx"]
 m["deployedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 json.dump(m, open(path, "w"), indent=2)
 print("wrote", path)
 PY
-
+ADDR=$(echo "$JSON" | python -c "import sys,json; print(json.load(sys.stdin)['agentVault'])")
 echo
 echo "AgentVault (Stylus) : $ADDR"
 echo "Explorer            : $EXPLORER/address/$ADDR"
-echo "Next: ./scripts/deploy_mocks.sh   (tokenized-stock mocks + swap adapter)"
+echo "Next: PRIVATE_KEY=0x... ./scripts/deploy_mocks.sh"

@@ -42,12 +42,16 @@ jobs:
         run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
       - name: Build WASM (panic=immediate-abort via .cargo/config.toml)
         run: cargo build --release --target wasm32-unknown-unknown
+      - name: wasm-opt (same pass as the deploy script)
+        run: |
+          npm i -g binaryen
+          wasm-opt -Oz --enable-bulk-memory-opt --enable-sign-ext --enable-mutable-globals --enable-nontrapping-float-to-int             -o target/wasm32-unknown-unknown/release/vigiles_vault.opt.wasm target/wasm32-unknown-unknown/release/vigiles_vault.wasm
       - name: Enforce Stylus size limits (128 KiB raw, 24 KiB brotli)
         run: |
           pip install brotli --quiet
           python - <<'PY'
           import brotli, sys
-          raw = open('target/wasm32-unknown-unknown/release/vigiles_vault.wasm','rb').read()
+          raw = open('target/wasm32-unknown-unknown/release/vigiles_vault.opt.wasm','rb').read()
           br = brotli.compress(raw, quality=11, lgwin=22)
           print(f"raw={len(raw)} brotli={len(br)}")
           assert len(raw) <= 128*1024, "uncompressed WASM over 128 KiB"

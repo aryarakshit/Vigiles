@@ -76,7 +76,7 @@ function Hero() {
           {/* facts, as a quiet list */}
           <dl className="px-8 md:px-12 py-6 grid grid-cols-[1fr_auto] gap-y-3 text-[14px]">
             {[
-              ["Stylus WASM", "23.8 KB brotli"],
+              ["Stylus WASM", "21.9 KB brotli"],
               ["Tests", "50 Foundry · 35 Rust"],
               ["Invariant fuzz", "128k calls"],
               ["unsafe blocks", "0"],

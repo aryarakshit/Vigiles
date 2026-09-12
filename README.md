@@ -74,13 +74,13 @@ All reproducible from a clean checkout (see *Running locally*).
 
 | Check | Result |
 |---|---|
-| Stylus WASM (nightly, `panic=immediate-abort`) | **89,518 B raw · 23,763 B brotli** — under the 128 KiB / 24 KiB limits |
+| Stylus WASM (nightly `immediate-abort` build → `wasm-opt -Oz`) | **67,214 B raw · 21,900 B brotli** — under the 128 KiB / 24 KiB limits; **activation validated by Robinhood Chain's own prover** via `eth_call` (`scripts/stylus_raw.py check`) |
 | `unsafe` blocks in contract code | 0 |
 | Rust tests — pure risk engine + `TestVM` against the real contract (incl. every oracle branch) | **35 passed** |
 | Foundry — unit, hostile adapters (Thief/Greedy/Reentrant/Stingy/PartialFill), exploit regressions, oracle guard, v3 guardrails, fuzz, invariants (`Solvency`, `BobIsolation` · 256 runs · 128,000 calls) | **50 passed** |
 | Clippy `-D warnings` on `wasm32-unknown-unknown` | clean |
 
-The size numbers matter: the previous build of this vault compressed to ~30 KB, which **cannot be deployed** (EIP-170). Getting a 19-function contract with thirteen events and 27 custom errors under 24 KiB took a limb-wise `U256 / u64` division (replacing 4.4 KB of `ruint` code), a division-free oracle floor (cross-multiplication: `minOut·D + D > N`), and building `core` with the `immediate-abort` panic strategy (removing ~10 KB of `core::fmt` that panics keep alive through function pointers). Details in [`vigiles-vault/.cargo/config.toml`](vigiles-vault/.cargo/config.toml).
+The size numbers matter: the previous build of this vault compressed to ~30 KB, which **cannot be deployed** (EIP-170). Getting a 19-function contract with thirteen events and 27 custom errors under 24 KiB took a limb-wise `U256 / u64` division (replacing 4.4 KB of `ruint` code), a division-free oracle floor (cross-multiplication: `minOut·D + D > N`), building `core` with the `immediate-abort` panic strategy (removing ~10 KB of `core::fmt` that panics keep alive through function pointers), and a `wasm-opt -Oz` pass — which also fixes a real incompatibility: the linker leaves padded LEBs in `call_indirect` that Nitro's validator rejects (`zero byte expected`). Details in [`vigiles-vault/.cargo/config.toml`](vigiles-vault/.cargo/config.toml).
 
 Three bugs found on the way and fixed: the `#[public]` macro was exporting the private `reentrancyGuardEnter()` helper, so **anyone could brick the vault with one call**; `executeTrade`'s `data` was ABI-typed `uint8[]` instead of `bytes`; and the original oracle feed registry was global with no access control, so anyone could point a token at a hostile feed — replaced by per-user feeds with no admin at all. The first two are covered by the exported-ABI diff check in CI.
 
@@ -97,7 +97,9 @@ PRIVATE_KEY_PATH=./key.txt ./scripts/deploy_stylus.sh
 PRIVATE_KEY=0x... ./scripts/deploy_mocks.sh
 ```
 
-Requirements: Rust nightly with `rust-src` + `wasm32-unknown-unknown`; `cargo-stylus` (or Docker — the script falls back to `offchainlabs/cargo-stylus-base`); Foundry; a funded key on Robinhood Chain testnet (chain id 46630, RPC `https://rpc.testnet.chain.robinhood.com`, explorer `https://explorer.testnet.chain.robinhood.com`).
+Requirements: Rust nightly with `rust-src` + `wasm32-unknown-unknown`; Binaryen `wasm-opt` (`npm i -g binaryen`); Python 3 with `brotli`; Foundry (`cast`, `forge`); a funded key on Robinhood Chain testnet (chain id 46630, RPC `https://rpc.testnet.chain.robinhood.com`, explorer `https://explorer.testnet.chain.robinhood.com`).
+
+**No `cargo-stylus` and no Docker.** `cargo-stylus` does not build on Windows and its Docker image needs a working daemon, so [`scripts/stylus_raw.py`](scripts/stylus_raw.py) performs the same on-chain procedure directly, following `stylus-tools` 0.10.9: strip custom sections → brotli-11 → `EFF00000` prefix → `eth_call ArbWasm.activateProgram` with state overrides (the check) → CREATE with the 43-byte prelude → `activateProgram` with the data fee + 20 %. The dry run needs no key and reports the chain's own verdict.
 
 ## Three-minute demo
 
