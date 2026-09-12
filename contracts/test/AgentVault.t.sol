@@ -42,9 +42,12 @@ contract AgentVaultTest is Test {
         tslaFeed = new MockPriceFeed(8, 200e8, "TSLA / USD");
         seqFeed = new MockSequencerFeed();
 
+        // Feeds are per user: Alice wires the ones her cage trusts.
+        vm.startPrank(alice);
         vault.setPriceFeed(address(aapl), address(aaplFeed));
         vault.setPriceFeed(address(tsla), address(tslaFeed));
         vault.setSequencerFeed(address(seqFeed));
+        vm.stopPrank();
 
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
@@ -83,17 +86,6 @@ contract AgentVaultTest is Test {
     }
 
     // --- 1. Deposit & Withdraw Tests ---
-
-    function test_DepositAndWithdrawETH() public {
-        vm.startPrank(alice);
-        vault.depositEth{value: 10 ether}();
-        assertEq(vault.getBalance(alice, address(0)), 10 ether);
-
-        vault.withdrawEth(4 ether);
-        assertEq(vault.getBalance(alice, address(0)), 6 ether);
-        assertEq(alice.balance, 94 ether);
-        vm.stopPrank();
-    }
 
     function test_DepositAndWithdrawERC20TokenizedStock() public {
         vm.startPrank(alice);
@@ -169,15 +161,20 @@ contract AgentVaultTest is Test {
     }
 
     function test_CannotAllowlistTokenAsAdapter() public {
-        vm.startPrank(alice);
-        // Attempt to add AAPL (a token) as an adapter
-        vm.expectRevert(IAgentVault.InvalidAdapter.selector);
-        vault.setAdapter(agentBot, address(aapl), true);
+        // Policies are immutable per epoch: the only way in is createSessionKey,
+        // which rejects an adapter that is also a whitelisted token.
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(aapl);
+        uint256[] memory caps = new uint256[](1);
+        caps[0] = 100 ether;
+        uint256[] memory daily = new uint256[](1);
+        daily[0] = 500 ether;
+        address[] memory adapters = new address[](1);
+        adapters[0] = address(aapl);
 
-        // Attempt to add adapter as a token
-        vm.expectRevert(IAgentVault.InvalidToken.selector);
-        vault.setTokenPolicy(agentBot, address(adapter), true, 100 ether, 500 ether);
-        vm.stopPrank();
+        vm.prank(alice);
+        vm.expectRevert(IAgentVault.InvalidAdapter.selector);
+        vault.createSessionKey(agentBot, block.timestamp + 1 days, tokens, caps, daily, adapters);
     }
 
     // --- 3. Linear Token Bucket Refill Tests ---
@@ -372,12 +369,8 @@ contract AgentVaultTest is Test {
         vm.prank(alice);
         vault.depositErc20(address(aapl), 1000 ether);
 
-        // Setting adapter = aapl token must revert in setAdapter
-        vm.prank(alice);
-        vm.expectRevert(IAgentVault.InvalidAdapter.selector);
-        vault.setAdapter(agentBot, address(aapl), true);
-
-        // Calling trade with unapproved adapter reverts with AdapterNotAllowed
+        // The AAPL token was never allow-listed as an adapter (createSessionKey forbids it),
+        // so routing through it reverts with AdapterNotAllowed
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.AdapterNotAllowed.selector);
         vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(aapl), keccak256("intent"), "");

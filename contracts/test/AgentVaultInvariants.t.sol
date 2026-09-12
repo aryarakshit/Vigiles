@@ -160,9 +160,11 @@ contract AgentVaultInvariantsTest is StdInvariant, Test {
         tslaFeed = new MockPriceFeed(8, 200e8, "TSLA / USD");
         seqFeed = new MockSequencerFeed();
 
+        vm.startPrank(alice);
         vault.setPriceFeed(address(aapl), address(aaplFeed));
         vault.setPriceFeed(address(tsla), address(tslaFeed));
         vault.setSequencerFeed(address(seqFeed));
+        vm.stopPrank();
 
         // Alice initializes session key for agentBot
         address[] memory tokens = new address[](2);

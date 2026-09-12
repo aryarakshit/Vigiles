@@ -20,6 +20,7 @@ const GUARDS = [
   { n: "05", name: "Position cap", what: "Max holding per ticker. Bounds the buy side the way daily caps bound the sell side.", err: "PositionCapExceeded" },
   { n: "06", name: "Dead-man switch", what: "Miss a heartbeat and the agent freezes until you check in.", err: "HeartbeatMissed" },
   { n: "07", name: "Intent receipts", what: "Every trade commits keccak(rationale) on-chain. No receipt, no trade.", err: "MissingIntent" },
+  { n: "08", name: "Price floor", what: "Chainlink-priced minimum output, per user, with a sequencer-uptime check. No admin key.", err: "SlippageExceeded" },
 ] as const;
 
 /** The cage, as geometric abstraction: a frame, five bars, one green circle. */
@@ -75,8 +76,8 @@ function Hero() {
           {/* facts, as a quiet list */}
           <dl className="px-8 md:px-12 py-6 grid grid-cols-[1fr_auto] gap-y-3 text-[14px]">
             {[
-              ["Stylus WASM", "22.8 KB brotli"],
-              ["Tests", "51 Foundry · 24 Rust"],
+              ["Stylus WASM", "23.8 KB brotli"],
+              ["Tests", "50 Foundry · 35 Rust"],
               ["Invariant fuzz", "128k calls"],
               ["unsafe blocks", "0"],
             ].map(([k, v]) => (
@@ -118,7 +119,7 @@ function GuardTable() {
           <div className="lg:sticky lg:top-10">
             <Idx n="01">System</Idx>
             <h2 className="display text-5xl md:text-7xl mt-5">
-              Seven
+              Eight
               <br />
               bars.
             </h2>

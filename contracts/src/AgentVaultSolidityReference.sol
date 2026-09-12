@@ -56,8 +56,8 @@ contract AgentVaultSolidityReference is IAgentVault {
     // user => agent => epoch => adapter => bool
     mapping(address => mapping(address => mapping(uint256 => mapping(address => bool)))) internal allowedAdapters;
 
-    // user => agent => maxSlippageBps
-    mapping(address => mapping(address => uint256)) public override sessionSlippage;
+    // user => agent => maxSlippageBps (0 = default)
+    mapping(address => mapping(address => uint256)) internal sessionSlippages;
 
     // v3: user => agent => guards (not epoch-scoped: guards only ever restrict)
     mapping(address => mapping(address => SessionGuardState)) internal guards;
@@ -65,21 +65,16 @@ contract AgentVaultSolidityReference is IAgentVault {
     // v3: user => agent => epoch => token => max holding (0 = unlimited)
     mapping(address => mapping(address => mapping(uint256 => mapping(address => uint256)))) internal positionCaps;
 
-    /// @dev Deployer; the only address allowed to wire oracle feeds.
-    address public immutable owner;
-
     uint256 public constant SECONDS_PER_HOUR = 3600;
 
-    // token => price feed
-    mapping(address => address) public priceFeeds;
+    // Oracle floor, per user: user => token => Chainlink-shaped feed (0 = none)
+    mapping(address => mapping(address => address)) internal priceFeeds;
+    // user => L2 sequencer uptime feed (0 = not checked)
+    mapping(address => address) internal sequencerFeeds;
 
-    // Sequencer uptime feed
-    address public sequencerUptimeFeed;
-
-    // Max staleness for oracle feeds (default: 3600 seconds = 1 hour)
-    uint256 public maxStaleness = 3600;
-
-    // Sequencer grace period after restart (default: 3600 seconds = 1 hour)
+    // Oracle answers older than this are refused.
+    uint256 public constant MAX_STALENESS = 3600;
+    // Seconds the sequencer must have been back up before trades resume.
     uint256 public constant GRACE_PERIOD_TIME = 3600;
 
     // Reentrancy guard state
@@ -97,40 +92,27 @@ contract AgentVaultSolidityReference is IAgentVault {
         _reentrancyStatus = NOT_ENTERED;
     }
 
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert Unauthorized();
-        _;
-    }
+    // --- Oracle floor configuration (per user — there is no admin key) ---
 
-    constructor() {
-        owner = msg.sender;
-    }
-
-    // --- Price Feed & Sequencer Admin (owner-only: a hostile feed is a price-floor bypass) ---
-
-    function setPriceFeed(address token, address feed) external onlyOwner {
+    function setPriceFeed(address token, address feed) external override {
         if (token == address(0)) revert ZeroAddress();
-        priceFeeds[token] = feed;
-        emit PriceFeedUpdated(token, feed);
+        priceFeeds[msg.sender][token] = feed;
+        emit PriceFeedUpdated(msg.sender, token, feed);
     }
 
-    function setSequencerFeed(address feed) external onlyOwner {
-        sequencerUptimeFeed = feed;
-        emit SequencerFeedUpdated(feed);
+    function setSequencerFeed(address feed) external override {
+        sequencerFeeds[msg.sender] = feed;
+        emit SequencerFeedUpdated(msg.sender, feed);
     }
 
-    function setMaxStaleness(uint256 _maxStaleness) external onlyOwner {
-        if (_maxStaleness == 0) revert ZeroAmount();
-        maxStaleness = _maxStaleness;
+    function setSessionSlippage(address agent, uint256 maxSlippageBps) external override {
+        if (agent == address(0)) revert ZeroAddress();
+        if (maxSlippageBps > 5000) revert InvalidCap();
+        sessionSlippages[msg.sender][agent] = maxSlippageBps;
+        emit SessionSlippageUpdated(msg.sender, agent, maxSlippageBps);
     }
 
     // --- Core User Functions ---
-
-    function depositEth() external payable override nonReentrant {
-        if (msg.value == 0) revert ZeroAmount();
-        balances[msg.sender][address(0)] += msg.value;
-        emit Deposit(msg.sender, address(0), msg.value);
-    }
 
     function depositErc20(address token, uint256 amount) external override nonReentrant {
         if (token == address(0)) revert ZeroAddress();
@@ -146,18 +128,6 @@ contract AgentVaultSolidityReference is IAgentVault {
 
         balances[msg.sender][token] += actualReceived;
         emit Deposit(msg.sender, token, actualReceived);
-    }
-
-    function withdrawEth(uint256 amount) external override nonReentrant {
-        if (amount == 0) revert ZeroAmount();
-        if (balances[msg.sender][address(0)] < amount) revert InsufficientBalance();
-
-        balances[msg.sender][address(0)] -= amount;
-
-        (bool success, ) = msg.sender.call{value: amount}("");
-        if (!success) revert ExternalCallFailed();
-
-        emit Withdraw(msg.sender, address(0), amount);
     }
 
     function withdrawErc20(address token, uint256 amount) external override nonReentrant {
@@ -231,70 +201,12 @@ contract AgentVaultSolidityReference is IAgentVault {
         emit SessionKeyCreated(msg.sender, agent, expiry, currentEpoch);
     }
 
-    function setTokenPolicy(
-        address agent,
-        address token,
-        bool allowed,
-        uint256 perTradeCap,
-        uint256 dailyCap
-    ) external override nonReentrant {
-        SessionConfig storage session = sessions[msg.sender][agent];
-        if (!session.isActive) revert SessionKeyInactive();
-        if (block.timestamp >= session.expiry) revert SessionKeyExpired();
-        if (token == address(0) || token == address(this) || token == agent) revert InvalidToken();
-
-        uint256 currentEpoch = session.epoch;
-        if (allowedAdapters[msg.sender][agent][currentEpoch][token]) revert InvalidToken();
-
-        TokenPolicy storage policy = tokenPolicies[msg.sender][agent][currentEpoch][token];
-
-        if (allowed) {
-            if (perTradeCap == 0 || dailyCap == 0 || perTradeCap > dailyCap) {
-                revert InvalidCap();
-            }
-
-            uint256 currentAvail = _calcAvailable(policy);
-            policy.allowed = true;
-            policy.perTradeCap = perTradeCap;
-            policy.dailyCap = dailyCap;
-            // Cap bucket to new dailyCap
-            policy.bucket = currentAvail > dailyCap ? dailyCap : currentAvail;
-            if (policy.bucket == 0 && policy.bucketTs == 0) {
-                policy.bucket = dailyCap;
-            }
-            policy.bucketTs = block.timestamp;
-        } else {
-            policy.allowed = false;
-        }
-
-        emit TokenPolicyUpdated(msg.sender, agent, token, allowed, perTradeCap, dailyCap, currentEpoch);
-    }
-
-    function setAdapter(address agent, address adapter, bool allowed) external override nonReentrant {
-        SessionConfig storage session = sessions[msg.sender][agent];
-        if (!session.isActive) revert SessionKeyInactive();
-        if (block.timestamp >= session.expiry) revert SessionKeyExpired();
-        if (adapter == address(0) || adapter == address(this) || adapter == agent) revert InvalidAdapter();
-
-        uint256 currentEpoch = session.epoch;
-        if (tokenPolicies[msg.sender][agent][currentEpoch][adapter].allowed) revert InvalidAdapter();
-
-        allowedAdapters[msg.sender][agent][currentEpoch][adapter] = allowed;
-        emit AdapterPolicyUpdated(msg.sender, agent, adapter, allowed, currentEpoch);
-    }
-
     function revokeSessionKey(address agent) external override nonReentrant {
         if (agent == address(0)) revert ZeroAddress();
         SessionConfig storage session = sessions[msg.sender][agent];
         session.isActive = false;
         session.epoch += 1;
         emit SessionKeyRevoked(msg.sender, agent, session.epoch);
-    }
-
-    function setSessionSlippage(address agent, uint256 maxSlippageBps) external override nonReentrant {
-        if (maxSlippageBps > 5000) revert InvalidCap(); // Max 50% slippage allowed
-        sessionSlippage[msg.sender][agent] = maxSlippageBps;
-        emit SessionSlippageUpdated(msg.sender, agent, maxSlippageBps);
     }
 
     // --- v3 Guardrail Configuration ---
@@ -482,48 +394,40 @@ contract AgentVaultSolidityReference is IAgentVault {
         uint256 amountIn,
         uint256 minAmountOut
     ) internal view {
-        address feedIn = priceFeeds[tokenIn];
-        address feedOut = priceFeeds[tokenOut];
+        address feedIn = priceFeeds[user][tokenIn];
+        address feedOut = priceFeeds[user][tokenOut];
 
-        // If either feed is not set, skip oracle check (or testnet mode)
+        // Enforced only when the user wired feeds for both tokens.
         if (feedIn == address(0) || feedOut == address(0)) {
             return;
         }
 
-        // Check sequencer uptime if configured
-        if (sequencerUptimeFeed != address(0)) {
-            (, int256 seqAnswer, uint256 seqStartedAt, , ) = ISequencerUptimeFeed(sequencerUptimeFeed).latestRoundData();
+        address seq = sequencerFeeds[user];
+        if (seq != address(0)) {
+            (, int256 seqAnswer, uint256 seqStartedAt, , ) = ISequencerUptimeFeed(seq).latestRoundData();
             if (seqAnswer != 0) revert SequencerDown();
             if (block.timestamp - seqStartedAt < GRACE_PERIOD_TIME) revert GracePeriodNotOver();
         }
 
-        // Check tokenIn price feed
         (, int256 pIn, , uint256 upIn, ) = AggregatorV3Interface(feedIn).latestRoundData();
-        if (pIn <= 0 || upIn == 0 || block.timestamp - upIn > maxStaleness) revert StalePriceFeed();
+        if (pIn <= 0 || upIn == 0 || block.timestamp - upIn > MAX_STALENESS) revert StalePriceFeed();
 
-        // Check tokenOut price feed
         (, int256 pOut, , uint256 upOut, ) = AggregatorV3Interface(feedOut).latestRoundData();
-        if (pOut <= 0 || upOut == 0 || block.timestamp - upOut > maxStaleness) revert StalePriceFeed();
+        if (pOut <= 0 || upOut == 0 || block.timestamp - upOut > MAX_STALENESS) revert StalePriceFeed();
 
         uint8 dIn = IERC20Metadata(tokenIn).decimals();
         uint8 dOut = IERC20Metadata(tokenOut).decimals();
         uint8 fpIn = AggregatorV3Interface(feedIn).decimals();
         uint8 fpOut = AggregatorV3Interface(feedOut).decimals();
 
-        // expectedOut = (amountIn * pIn * 10^dOut * 10^fpOut) / (pOut * 10^dIn * 10^fpIn)
-        uint256 numerator = amountIn * uint256(pIn) * (10 ** dOut) * (10 ** fpOut);
-        uint256 denominator = uint256(pOut) * (10 ** dIn) * (10 ** fpIn);
-        uint256 expectedOut = numerator / denominator;
+        uint256 bps = sessionSlippages[user][agent];
+        if (bps == 0) bps = DEFAULT_MAX_SLIPPAGE_BPS;
 
-        uint256 bps = sessionSlippage[user][agent];
-        if (bps == 0) {
-            bps = DEFAULT_MAX_SLIPPAGE_BPS;
-        }
-
-        uint256 floor = (expectedOut * (10_000 - bps)) / 10_000;
-        if (minAmountOut < floor) {
-            revert SlippageExceeded();
-        }
+        // floor = N / D (integer). Agents compute minOut with floored maths, so accept
+        // minOut >= floor(N/D), i.e. minOut*D + D > N — cross-multiplied, identical to the Stylus vault.
+        uint256 d = uint256(pOut) * (10 ** (uint256(dIn) + fpIn)) * 10_000;
+        uint256 n = amountIn * uint256(pIn) * (10 ** (uint256(dOut) + fpOut)) * (10_000 - bps);
+        if (minAmountOut * d + d <= n) revert SlippageExceeded();
     }
 
     function _swapMeasured(
@@ -646,6 +550,14 @@ contract AgentVaultSolidityReference is IAgentVault {
         return positionCaps[user][agent][sessions[user][agent].epoch][token];
     }
 
+    function getOracleConfig(address user, address agent, address token) external view override returns (
+        address priceFeed,
+        address sequencerFeed,
+        uint256 maxSlippageBps
+    ) {
+        return (priceFeeds[user][token], sequencerFeeds[user], sessionSlippages[user][agent]);
+    }
+
     function getPriceFloor(
         address user,
         address agent,
@@ -653,8 +565,8 @@ contract AgentVaultSolidityReference is IAgentVault {
         address tokenOut,
         uint256 amountIn
     ) external view override returns (uint256 minAmountOutFloor) {
-        address feedIn = priceFeeds[tokenIn];
-        address feedOut = priceFeeds[tokenOut];
+        address feedIn = priceFeeds[user][tokenIn];
+        address feedOut = priceFeeds[user][tokenOut];
         if (feedIn == address(0) || feedOut == address(0)) return 0;
 
         (, int256 pIn, , , ) = AggregatorV3Interface(feedIn).latestRoundData();
@@ -670,7 +582,7 @@ contract AgentVaultSolidityReference is IAgentVault {
         uint256 denominator = uint256(pOut) * (10 ** dIn) * (10 ** fpIn);
         uint256 expectedOut = numerator / denominator;
 
-        uint256 bps = sessionSlippage[user][agent];
+        uint256 bps = sessionSlippages[user][agent];
         if (bps == 0) bps = DEFAULT_MAX_SLIPPAGE_BPS;
 
         return (expectedOut * (10_000 - bps)) / 10_000;

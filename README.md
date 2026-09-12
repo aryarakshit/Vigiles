@@ -27,12 +27,13 @@ Everything below is checked inside `executeTrade` in the Stylus contract. Guards
 | 5 | **Position cap** — max holding per ticker | Piling the whole vault into one name | Bounds the *buy* side the way daily caps bound the sell side |
 | 6 | **Dead-man switch** — heartbeat interval | "User walked away for a week, agent kept going" | "A human is still watching" becomes an on-chain predicate |
 | 7 | **Intent receipts** — `keccak256(rationale)` required on every trade | Untraceable decisions; rewritten logs | The agent commits to *why* before it can act; the log is tamper-evident |
+| 8 | **Oracle price floor** — Chainlink-shaped feeds + L2 sequencer uptime, per user | Dumping to a hostile venue below fair value | Feeds are chosen by the user like tokens and adapters; there is no admin key to compromise |
 
-Plus the v2 foundation: revocation with epoch bump, reentrancy lock on every mutating entrypoint, balance-diff settlement (the vault measures what a venue actually took and returned), exact approve → swap → approve-to-zero, and zero `unsafe` Rust.
+Plus the v2 foundation: revocation with epoch bump, reentrancy lock on every mutating entrypoint, balance-diff settlement (the vault measures what a venue actually took and returned), exact approve → swap → approve-to-zero, and zero `unsafe` Rust. Token policies and adapter lists are **immutable for the life of an epoch** — the only way to change them is to re-issue the key, which wipes everything. The vault holds ERC-20 tokenized stocks only; native ETH is used for gas, never custodied.
 
 ## Security model in one paragraph
 
-A fully compromised agent holding a valid session key can: trade whitelisted tokens for other whitelisted tokens, through allow-listed adapters, up to `perTradeCap` per order, `dailyCap` per rolling day, `maxTradesPerHour`, inside the trading window, while the owner keeps heartbeating, never exceeding a position cap, and only with a rationale hash attached. It cannot withdraw, cannot touch other users' balances, cannot use another venue, cannot trade a token outside the list, and stops the moment the owner revokes (one transaction) or goes silent. **Honest worst case without an oracle floor:** the agent trades the daily caps at bad prices — the UI shows this number (`Σ dailyCap × reference price`) before you grant the key.
+A fully compromised agent holding a valid session key can: trade whitelisted tokens for other whitelisted tokens, through allow-listed adapters, up to `perTradeCap` per order, `dailyCap` per rolling day, `maxTradesPerHour`, inside the trading window, while the owner keeps heartbeating, never exceeding a position cap, and only with a rationale hash attached. It cannot withdraw, cannot touch other users' balances, cannot use another venue, cannot trade a token outside the list, and stops the moment the owner revokes (one transaction) or goes silent. **Honest worst case:** without price feeds wired, the agent can trade the daily caps at bad prices — the UI shows this number (`Σ dailyCap × reference price`) before you grant the key. With feeds wired for both tokens, every fill must clear a Chainlink-priced floor within the session's slippage tolerance (default 5%), and the L2 sequencer must be up and past its grace period.
 
 ## Architecture
 
@@ -73,15 +74,15 @@ All reproducible from a clean checkout (see *Running locally*).
 
 | Check | Result |
 |---|---|
-| Stylus WASM (nightly, `panic=immediate-abort`) | **85,108 B raw · 22,786 B brotli** — under the 128 KiB / 24 KiB limits |
+| Stylus WASM (nightly, `panic=immediate-abort`) | **89,518 B raw · 23,763 B brotli** — under the 128 KiB / 24 KiB limits |
 | `unsafe` blocks in contract code | 0 |
-| Rust tests — pure risk engine + `TestVM` against the real contract | **24 passed** |
-| Foundry — unit, hostile adapters (Thief/Greedy/Reentrant/Stingy/PartialFill), exploit regressions, oracle guard, v3 guardrails, fuzz, invariants (`Solvency`, `BobIsolation` · 256 runs · 128,000 calls) | **51 passed** |
+| Rust tests — pure risk engine + `TestVM` against the real contract (incl. every oracle branch) | **35 passed** |
+| Foundry — unit, hostile adapters (Thief/Greedy/Reentrant/Stingy/PartialFill), exploit regressions, oracle guard, v3 guardrails, fuzz, invariants (`Solvency`, `BobIsolation` · 256 runs · 128,000 calls) | **50 passed** |
 | Clippy `-D warnings` on `wasm32-unknown-unknown` | clean |
 
-The size numbers matter: the previous build of this vault compressed to ~30 KB, which **cannot be deployed** (EIP-170). Getting a 19-function contract with ten events and 24 custom errors under 24 KiB took a limb-wise `U256 / u64` division (replacing 4.4 KB of `ruint` code) and building `core` with the `immediate-abort` panic strategy (removing ~10 KB of `core::fmt` that panics keep alive through function pointers). Details in [`vigiles-vault/.cargo/config.toml`](vigiles-vault/.cargo/config.toml).
+The size numbers matter: the previous build of this vault compressed to ~30 KB, which **cannot be deployed** (EIP-170). Getting a 19-function contract with thirteen events and 27 custom errors under 24 KiB took a limb-wise `U256 / u64` division (replacing 4.4 KB of `ruint` code), a division-free oracle floor (cross-multiplication: `minOut·D + D > N`), and building `core` with the `immediate-abort` panic strategy (removing ~10 KB of `core::fmt` that panics keep alive through function pointers). Details in [`vigiles-vault/.cargo/config.toml`](vigiles-vault/.cargo/config.toml).
 
-Two bugs found on the way and fixed: the `#[public]` macro was exporting the private `reentrancyGuardEnter()` helper, so **anyone could brick the vault with one call**; and `executeTrade`'s `data` was ABI-typed `uint8[]` instead of `bytes`. Both are covered by the exported-ABI diff check in CI.
+Three bugs found on the way and fixed: the `#[public]` macro was exporting the private `reentrancyGuardEnter()` helper, so **anyone could brick the vault with one call**; `executeTrade`'s `data` was ABI-typed `uint8[]` instead of `bytes`; and the original oracle feed registry was global with no access control, so anyone could point a token at a hostile feed — replaced by per-user feeds with no admin at all. The first two are covered by the exported-ABI diff check in CI.
 
 ## Deployment
 
@@ -113,7 +114,7 @@ Requirements: Rust nightly with `rust-src` + `wasm32-unknown-unknown`; `cargo-st
 ```
 vigiles-vault/     Stylus contract (Rust). src/lib.rs entrypoints, src/risk_engine.rs pure guards + tests
   .cargo/config.toml    build-std + immediate-abort (size)
-contracts/              Foundry: Solidity reference twin, mocks, 51 tests incl. invariants, DeployMocks script
+contracts/              Foundry: Solidity reference twin, mocks, 50 tests incl. invariants, DeployMocks script
   src/IAgentVaultStylus.sol   exact ABI of the deployed Stylus vault (generated; CI diffs it)
 frontend/               Next.js dashboard. lib/onchain.ts (viem), lib/sim.ts (same rules, in-memory), lib/guards.ts (TS port)
 mcp/                    MCP server (official SDK): status · preflight · execute_trade · intent_log
@@ -157,15 +158,15 @@ The agent's private key is read from `AGENT_PRIVATE_KEY`, used to sign, and neve
 ## Design notes
 
 - **Guards are session-scoped, not epoch-scoped.** Re-issuing a key wipes token policies and position caps (epoch bump) but keeps the window/velocity/heartbeat settings — guards can only ever make an agent *more* restricted, so carrying them across rotations is the safe default.
-- **Guard order is fixed and documented**: session → adapter → whitelist → per-trade → daily bucket → balance → intent → heartbeat → window → velocity → *swap* → position cap. A refused trade rolls back every counter, so a rejected order never consumes velocity budget (tested).
-- **Oracle price floor** (Chainlink feed + L2 sequencer uptime) exists in the Solidity reference and its tests. It is *not* in the Stylus build yet: there are no Chainlink feeds for tokenized stocks on Robinhood testnet, and the extra `sol_interface!` would cost ~6 KB of a budget we finished with ~1.7 KB to spare. It is the first item below.
+- **Guard order is fixed and documented**: session → adapter → whitelist → per-trade → daily bucket → balance → intent → heartbeat → window → velocity → oracle floor → *swap* → position cap. A refused trade rolls back every counter, so a rejected order never consumes velocity budget (tested).
+- **Oracle floor is per user and opt-in.** `setPriceFeed(token, feed)` and `setSequencerFeed(feed)` are stored under the caller; the floor is enforced only when both tokens of a trade have a feed. Robinhood testnet has no Chainlink feeds for tokenized stocks today, so the demo runs without them; wiring a feed is one transaction and the whole path is covered by `TestVM` tests against the real contract (stale, negative, sequencer down, grace period, slippage tight/loose).
+- **Feeds return `uint256`, not `int256`/`uint80`, in the Stylus interface.** Selectors depend only on input types, a left-padded word decodes identically, and one decoder serves every feed call; negative answers are detected by the top bit. It is a size optimisation with no behavioural difference.
 
 ## Roadmap
 
-1. Oracle floor in Stylus once feeds exist on Robinhood Chain (or via a permissioned attestor).
-2. Drawdown circuit breaker — auto-pause when oracle-valued portfolio drops N% in 24 h.
-3. ERC-7715 / EIP-7702 packaging so the vault is a permission module rather than a custodial contract.
-4. Corporate-action pause — freeze a ticker while a split/dividend multiplier is pending.
+1. Drawdown circuit breaker — auto-pause when oracle-valued portfolio drops N% in 24 h.
+2. ERC-7715 / EIP-7702 packaging so the vault is a permission module rather than a custodial contract.
+3. Corporate-action pause — freeze a ticker while a split/dividend multiplier is pending.
 
 ## License
 

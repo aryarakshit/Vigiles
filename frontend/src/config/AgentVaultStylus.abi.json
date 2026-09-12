@@ -81,13 +81,6 @@
   },
   {
     "type": "function",
-    "name": "depositEth",
-    "inputs": [],
-    "outputs": [],
-    "stateMutability": "payable"
-  },
-  {
-    "type": "function",
     "name": "executeTrade",
     "inputs": [
       {
@@ -156,6 +149,45 @@
       }
     ],
     "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getOracleConfig",
+    "inputs": [
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "agent",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      },
       {
         "name": "",
         "type": "uint256",
@@ -392,29 +424,6 @@
   },
   {
     "type": "function",
-    "name": "setAdapter",
-    "inputs": [
-      {
-        "name": "agent",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "adapter",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "allowed",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "setPositionCap",
     "inputs": [
       {
@@ -431,6 +440,37 @@
         "name": "max_position",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setPriceFeed",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "feed",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setSequencerFeed",
+    "inputs": [
+      {
+        "name": "feed",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -476,7 +516,7 @@
   },
   {
     "type": "function",
-    "name": "setTokenPolicy",
+    "name": "setSessionSlippage",
     "inputs": [
       {
         "name": "agent",
@@ -484,22 +524,7 @@
         "internalType": "address"
       },
       {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "allowed",
-        "type": "bool",
-        "internalType": "bool"
-      },
-      {
-        "name": "per_trade_cap",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "daily_cap",
+        "name": "max_slippage_bps",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -526,19 +551,6 @@
     "stateMutability": "nonpayable"
   },
   {
-    "type": "function",
-    "name": "withdrawEth",
-    "inputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
     "type": "error",
     "name": "AdapterNotAllowed",
     "inputs": []
@@ -551,6 +563,11 @@
   {
     "type": "error",
     "name": "ExternalCallFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "GracePeriodNotOver",
     "inputs": []
   },
   {
@@ -620,6 +637,11 @@
   },
   {
     "type": "error",
+    "name": "SequencerDown",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "SessionKeyExpired",
     "inputs": []
   },
@@ -630,17 +652,22 @@
   },
   {
     "type": "error",
+    "name": "SlippageExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "SpendLimitExceeded",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "TokenNotAllowed",
+    "name": "StalePriceFeed",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "Unauthorized",
+    "name": "TokenNotAllowed",
     "inputs": []
   },
   {

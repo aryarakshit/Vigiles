@@ -35,8 +35,8 @@ interface IAgentVault {
         uint256 received,
         address adapter
     );
-    event PriceFeedUpdated(address indexed token, address feed);
-    event SequencerFeedUpdated(address feed);
+    event PriceFeedUpdated(address indexed user, address indexed token, address feed);
+    event SequencerFeedUpdated(address indexed user, address feed);
     event SessionSlippageUpdated(address indexed user, address indexed agent, uint256 maxSlippageBps);
 
     // --- v3 Guardrail Events ---
@@ -54,7 +54,6 @@ interface IAgentVault {
     event IntentRecorded(address indexed user, address indexed agent, uint256 indexed nonce, bytes32 intentHash);
 
     // --- Custom Errors ---
-    error Unauthorized();
     error SessionKeyInactive();
     error SessionKeyExpired();
     error SpendLimitExceeded();
@@ -85,9 +84,7 @@ interface IAgentVault {
     error InvalidGuard();
 
     // --- Core User Functions ---
-    function depositEth() external payable;
     function depositErc20(address token, uint256 amount) external;
-    function withdrawEth(uint256 amount) external;
     function withdrawErc20(address token, uint256 amount) external;
     function createSessionKey(
         address agent,
@@ -97,15 +94,15 @@ interface IAgentVault {
         uint256[] calldata dailyCaps,
         address[] calldata adapters
     ) external;
-    function setTokenPolicy(
-        address agent,
-        address token,
-        bool allowed,
-        uint256 perTradeCap,
-        uint256 dailyCap
-    ) external;
-    function setAdapter(address agent, address adapter, bool allowed) external;
     function revokeSessionKey(address agent) external;
+
+    // --- Oracle floor (per user: each cage chooses the feeds it trusts; there is no admin key) ---
+    /// @notice Chainlink-shaped feed for `token` in the caller's cage. `feed == 0` removes it.
+    ///         The floor is enforced only when both tokens of a trade have a feed.
+    function setPriceFeed(address token, address feed) external;
+    /// @notice L2 sequencer uptime feed for the caller's cage. `0` disables the check.
+    function setSequencerFeed(address feed) external;
+    /// @notice Max slippage the floor tolerates for `agent`, in bps (≤ 5000). `0` = default 500.
     function setSessionSlippage(address agent, uint256 maxSlippageBps) external;
 
     // --- v3 Guardrail Configuration ---
@@ -152,7 +149,11 @@ interface IAgentVault {
         uint256 availableNow
     );
     function isAdapterAllowed(address user, address agent, address adapter) external view returns (bool);
-    function sessionSlippage(address user, address agent) external view returns (uint256);
+    function getOracleConfig(address user, address agent, address token) external view returns (
+        address priceFeed,
+        address sequencerFeed,
+        uint256 maxSlippageBps
+    );
     function getSessionGuards(address user, address agent) external view returns (
         uint256 windowStart,
         uint256 windowEnd,

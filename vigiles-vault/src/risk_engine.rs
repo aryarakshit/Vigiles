@@ -330,6 +330,59 @@ impl RiskEngine {
             trade_nonce: counters.trade_nonce + 1,
         })
     }
+
+    // ---------------------------------------------------------------------
+    // Oracle price floor (pure, division-free)
+    // ---------------------------------------------------------------------
+
+    /// `10^n` with overflow reporting. `n > 77` cannot fit a U256 and is treated
+    /// as overflow rather than looping.
+    pub fn pow10(n: u64) -> Option<U256> {
+        if n > 77 {
+            return None;
+        }
+        let ten = U256::from(10u64);
+        let mut x = U256::from(1u64);
+        for _ in 0..n {
+            x = x.checked_mul(ten)?;
+        }
+        Some(x)
+    }
+
+    /// Does `min_out` clear the oracle floor?
+    ///
+    /// floor = ⌊ amount_in · p_in · 10^(d_out+fp_out) · (10_000 − bps) / (p_out · 10^(d_in+fp_in) · 10_000) ⌋ = ⌊N / D⌋
+    ///
+    /// Agents compute `min_out` with floored integer maths, so the contract must
+    /// accept `min_out >= ⌊N/D⌋`, which is `min_out · D + D > N`. Evaluated by
+    /// cross-multiplication so the WASM never needs a general U256 division.
+    ///
+    /// Returns `None` on arithmetic overflow (caller reverts with SafeMathError).
+    #[allow(clippy::too_many_arguments)]
+    pub fn min_out_meets_floor(
+        amount_in: U256,
+        min_out: U256,
+        p_in: U256,
+        p_out: U256,
+        d_in: u64,
+        d_out: u64,
+        fp_in: u64,
+        fp_out: u64,
+        bps: u64,
+    ) -> Option<bool> {
+        if bps > 10_000 {
+            return None;
+        }
+        let d = p_out
+            .checked_mul(Self::pow10(d_in.checked_add(fp_in)?)?)?
+            .checked_mul(U256::from(10_000u64))?;
+        let n = amount_in
+            .checked_mul(p_in)?
+            .checked_mul(Self::pow10(d_out.checked_add(fp_out)?)?)?
+            .checked_mul(U256::from(10_000 - bps))?;
+        let lhs = min_out.checked_mul(d)?.checked_add(d)?;
+        Some(lhs > n)
+    }
 }
 
 #[cfg(test)]
@@ -644,5 +697,62 @@ mod tests {
             RiskEngine::authorize_session_guards(now, &g, &c, true),
             Err(RiskEngineError::MissingIntent)
         );
+    }
+
+    // ---------------- oracle floor tests ----------------
+
+    const E18: u64 = 1_000_000_000_000_000_000;
+
+    #[test]
+    fn test_pow10() {
+        assert_eq!(RiskEngine::pow10(0), Some(U256::from(1u64)));
+        assert_eq!(RiskEngine::pow10(18), Some(U256::from(E18)));
+        assert!(RiskEngine::pow10(77).is_some());
+        assert_eq!(RiskEngine::pow10(78), None);
+    }
+
+    #[test]
+    fn test_floor_equal_prices_same_decimals() {
+        // AAPL $200 -> TSLA $200, both 18-dec tokens, both 8-dec feeds, 5% slippage.
+        let p = U256::from(200_00000000u64);
+        let amount = U256::from(100u64) * U256::from(E18);
+        let ok = |min: u64| RiskEngine::min_out_meets_floor(amount, U256::from(min) * U256::from(E18), p, p, 18, 18, 8, 8, 500);
+        assert_eq!(ok(95), Some(true)); // exactly the floor
+        assert_eq!(ok(96), Some(true));
+        assert_eq!(ok(94), Some(false));
+    }
+
+    #[test]
+    fn test_floor_different_prices_and_decimals() {
+        // Sell 10 of an 18-dec token at $300 for a 6-dec token at $150: expect 20 out (20e6), 1% slippage -> floor 19.8e6.
+        let amount = U256::from(10u64) * U256::from(E18);
+        let p_in = U256::from(300_00000000u64);
+        let p_out = U256::from(150_00000000u64);
+        let ok = |min: u64| RiskEngine::min_out_meets_floor(amount, U256::from(min), p_in, p_out, 18, 6, 8, 8, 100);
+        assert_eq!(ok(19_800_000), Some(true));
+        assert_eq!(ok(19_799_999), Some(false));
+        assert_eq!(ok(20_000_000), Some(true));
+    }
+
+    #[test]
+    fn test_floor_accepts_floored_min_out() {
+        // amount = 1e18 + 199 at equal prices, 5%: exact floor is 950000000000000189.05,
+        // an agent computing floor(amount * 95 / 100) sends ...189 and must be admitted.
+        let amount = U256::from(1_000_000_000_000_000_199u64);
+        let p = U256::from(200_00000000u64);
+        let floored = amount * U256::from(95u64) / U256::from(100u64);
+        assert_eq!(RiskEngine::min_out_meets_floor(amount, floored, p, p, 18, 18, 8, 8, 500), Some(true));
+        assert_eq!(RiskEngine::min_out_meets_floor(amount, floored - U256::from(1u64), p, p, 18, 18, 8, 8, 500), Some(false));
+    }
+
+    #[test]
+    fn test_floor_zero_slippage_and_overflow() {
+        let one = U256::from(1u64);
+        assert_eq!(RiskEngine::min_out_meets_floor(one, one, one, one, 0, 0, 0, 0, 0), Some(true));
+        assert_eq!(RiskEngine::min_out_meets_floor(U256::from(2u64), one, one, one, 0, 0, 0, 0, 0), Some(false));
+        // bps out of range and decimal overflow are reported, never silently wrong
+        assert_eq!(RiskEngine::min_out_meets_floor(one, one, one, one, 0, 0, 0, 0, 10_001), None);
+        assert_eq!(RiskEngine::min_out_meets_floor(U256::MAX, one, U256::MAX, one, 0, 0, 0, 0, 0), None);
+        assert_eq!(RiskEngine::min_out_meets_floor(one, one, one, one, 60, 0, 60, 0, 0), None);
     }
 }

@@ -18,6 +18,12 @@ sol_interface! {
         function transferFrom(address from, address to, uint256 amount) external returns (bool);
         function approve(address spender, uint256 amount) external returns (bool);
         function balanceOf(address account) external view returns (uint256);
+        function decimals() external view returns (uint256);
+    }
+
+    interface IPriceFeed {
+        function latestRoundData() external view returns (uint256, uint256, uint256, uint256, uint256);
+        function decimals() external view returns (uint256);
     }
 
     interface ISwapAdapter {
@@ -79,8 +85,11 @@ sol! {
     event PositionCapUpdated(address indexed user, address indexed agent, address indexed token, uint256 maxPosition, uint256 epoch);
     /// v3: tamper-proof commitment to the agent's stated reason for a trade.
     event IntentRecorded(address indexed user, address indexed agent, uint256 indexed nonce, bytes32 intentHash);
+    /// Oracle floor: feeds are chosen per user, like tokens and adapters.
+    event PriceFeedUpdated(address indexed user, address indexed token, address feed);
+    event SequencerFeedUpdated(address indexed user, address feed);
+    event SessionSlippageUpdated(address indexed user, address indexed agent, uint256 maxSlippageBps);
 
-    error Unauthorized();
     error SessionKeyInactive();
     error SessionKeyExpired();
     error SpendLimitExceeded();
@@ -104,11 +113,14 @@ sol! {
     error PositionCapExceeded();
     error MissingIntent();
     error InvalidGuard();
+    error StalePriceFeed();
+    error SequencerDown();
+    error GracePeriodNotOver();
+    error SlippageExceeded();
 }
 
 #[derive(SolidityError)]
 pub enum AgentVaultError {
-    Unauthorized(Unauthorized),
     SessionKeyInactive(SessionKeyInactive),
     SessionKeyExpired(SessionKeyExpired),
     SpendLimitExceeded(SpendLimitExceeded),
@@ -132,6 +144,10 @@ pub enum AgentVaultError {
     PositionCapExceeded(PositionCapExceeded),
     MissingIntent(MissingIntent),
     InvalidGuard(InvalidGuard),
+    StalePriceFeed(StalePriceFeed),
+    SequencerDown(SequencerDown),
+    GracePeriodNotOver(GracePeriodNotOver),
+    SlippageExceeded(SlippageExceeded),
 }
 
 /// Test-only: name the variant without pulling `core::fmt` into the WASM build.
@@ -139,7 +155,6 @@ pub enum AgentVaultError {
 impl core::fmt::Debug for AgentVaultError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
-            AgentVaultError::Unauthorized(_) => "Unauthorized",
             AgentVaultError::SessionKeyInactive(_) => "SessionKeyInactive",
             AgentVaultError::SessionKeyExpired(_) => "SessionKeyExpired",
             AgentVaultError::SpendLimitExceeded(_) => "SpendLimitExceeded",
@@ -163,6 +178,10 @@ impl core::fmt::Debug for AgentVaultError {
             AgentVaultError::PositionCapExceeded(_) => "PositionCapExceeded",
             AgentVaultError::MissingIntent(_) => "MissingIntent",
             AgentVaultError::InvalidGuard(_) => "InvalidGuard",
+            AgentVaultError::StalePriceFeed(_) => "StalePriceFeed",
+            AgentVaultError::SequencerDown(_) => "SequencerDown",
+            AgentVaultError::GracePeriodNotOver(_) => "GracePeriodNotOver",
+            AgentVaultError::SlippageExceeded(_) => "SlippageExceeded",
         })
     }
 }
@@ -239,8 +258,21 @@ sol_storage! {
         mapping(address => mapping(address => SessionGuardState)) guards;
         // v3: keccak(user, agent, epoch, token) => max holding; 0 = unlimited
         mapping(bytes32 => uint256) position_caps;
+        // oracle floor: user => token => Chainlink-shaped feed (0 = no floor for that token)
+        mapping(address => mapping(address => address)) price_feeds;
+        // oracle floor: user => L2 sequencer uptime feed (0 = not checked)
+        mapping(address => address) sequencer_feeds;
+        // oracle floor: user => agent => max slippage bps (0 = default 500)
+        mapping(address => mapping(address => uint256)) session_slippages;
     }
 }
+
+/// Oracle answers older than this are refused.
+const MAX_STALENESS: u64 = 3600;
+/// Seconds the L2 sequencer must have been back up before trades resume.
+const GRACE_PERIOD: u64 = 3600;
+/// Slippage tolerance used when a session has not set one.
+const DEFAULT_SLIPPAGE_BPS: u64 = 500;
 
 const NOT_ENTERED: U256 = U256::from_limbs([1, 0, 0, 0]);
 const ENTERED: U256 = U256::from_limbs([2, 0, 0, 0]);
@@ -285,6 +317,80 @@ impl AgentVault {
         self.reentrancy_status.set(NOT_ENTERED);
     }
 
+    /// Reads one Chainlink-shaped feed and returns `(answer, decimals)` after
+    /// staleness and sign checks. Answers with the top bit set are negative.
+    fn read_feed(&self, feed: Address, now: u64) -> Result<(U256, u64), AgentVaultError> {
+        let f = IPriceFeed::new(feed);
+        let (_round, answer, _started, updated_at, _answered) = f
+            .latest_round_data(self.vm(), Call::new())
+            .map_err(|_| AgentVaultError::ExternalCallFailed(ExternalCallFailed {}))?;
+        let stale = answer == U256::ZERO
+            || answer.bit(255)
+            || updated_at == U256::ZERO
+            || U256::from(now).saturating_sub(updated_at) > U256::from(MAX_STALENESS);
+        if stale {
+            return Err(AgentVaultError::StalePriceFeed(StalePriceFeed {}));
+        }
+        let dec = f
+            .decimals(self.vm(), Call::new())
+            .map_err(|_| AgentVaultError::ExternalCallFailed(ExternalCallFailed {}))?;
+        Ok((answer, dec.to::<u64>()))
+    }
+
+    /// Oracle price floor. Skipped unless the user configured a feed for BOTH
+    /// tokens; then the sequencer (if configured) must be up and past its grace
+    /// period, both feeds fresh, and `min_amount_out` must clear the floor.
+    fn verify_oracle_floor(
+        &self,
+        user: Address,
+        agent: Address,
+        token_in: Address,
+        token_out: Address,
+        amount_in: U256,
+        min_amount_out: U256,
+    ) -> Result<(), AgentVaultError> {
+        let feed_in = self.price_feeds.getter(user).getter(token_in).get();
+        let feed_out = self.price_feeds.getter(user).getter(token_out).get();
+        if feed_in == Address::ZERO || feed_out == Address::ZERO {
+            return Ok(());
+        }
+        let now = self.vm().block_timestamp();
+
+        let seq = self.sequencer_feeds.getter(user).get();
+        if seq != Address::ZERO {
+            let (_r, answer, started_at, _u, _a) = IPriceFeed::new(seq)
+                .latest_round_data(self.vm(), Call::new())
+                .map_err(|_| AgentVaultError::ExternalCallFailed(ExternalCallFailed {}))?;
+            if answer != U256::ZERO {
+                return Err(AgentVaultError::SequencerDown(SequencerDown {}));
+            }
+            if U256::from(now).saturating_sub(started_at) < U256::from(GRACE_PERIOD) {
+                return Err(AgentVaultError::GracePeriodNotOver(GracePeriodNotOver {}));
+            }
+        }
+
+        let (p_in, fp_in) = self.read_feed(feed_in, now)?;
+        let (p_out, fp_out) = self.read_feed(feed_out, now)?;
+        let d_in = IERC20::new(token_in)
+            .decimals(self.vm(), Call::new())
+            .map_err(|_| AgentVaultError::ExternalCallFailed(ExternalCallFailed {}))?
+            .to::<u64>();
+        let d_out = IERC20::new(token_out)
+            .decimals(self.vm(), Call::new())
+            .map_err(|_| AgentVaultError::ExternalCallFailed(ExternalCallFailed {}))?
+            .to::<u64>();
+
+        let mut bps = self.session_slippages.getter(user).getter(agent).get().to::<u64>();
+        if bps == 0 {
+            bps = DEFAULT_SLIPPAGE_BPS;
+        }
+        match RiskEngine::min_out_meets_floor(amount_in, min_amount_out, p_in, p_out, d_in, d_out, fp_in, fp_out, bps) {
+            Some(true) => Ok(()),
+            Some(false) => Err(AgentVaultError::SlippageExceeded(SlippageExceeded {})),
+            None => Err(AgentVaultError::SafeMathError(SafeMathError {})),
+        }
+    }
+
     fn load_guards(&self, user: Address, agent: Address) -> (SessionGuards, SessionCounters) {
         let g = self.guards.getter(user);
         let g = g.getter(agent);
@@ -309,38 +415,6 @@ impl AgentVault {
 #[cfg(any(target_arch = "wasm32", feature = "export-abi", test))]
 #[public]
 impl AgentVault {
-    #[payable]
-    pub fn deposit_eth(&mut self) -> Result<(), AgentVaultError> {
-        self.reentrancy_guard_enter()?;
-        let caller = self.vm().msg_sender();
-        let value = self.vm().msg_value();
-
-        if value == U256::ZERO {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::ZeroAmount(ZeroAmount {}));
-        }
-
-        let user_bals = self.balances.getter(caller);
-        let current_bal = user_bals.getter(Address::ZERO).get();
-        let new_bal = current_bal
-            .checked_add(value)
-            .ok_or(AgentVaultError::SafeMathError(SafeMathError {}))?;
-
-        let mut user_bals_setter = self.balances.setter(caller);
-        user_bals_setter.setter(Address::ZERO).set(new_bal);
-        self.reentrancy_guard_exit();
-
-        let event = Deposit {
-            user: caller,
-            token: Address::ZERO,
-            amount: value,
-        };
-        let log = event.encode_log_data();
-        let _ = self.vm().raw_log(log.topics(), &log.data);
-
-        Ok(())
-    }
-
     pub fn deposit_erc20(&mut self, token: Address, amount: U256) -> Result<(), AgentVaultError> {
         if token == Address::ZERO {
             return Err(AgentVaultError::ZeroAddress(ZeroAddress {}));
@@ -396,40 +470,6 @@ impl AgentVault {
             user: caller,
             token,
             amount: actual_received,
-        };
-        let log = event.encode_log_data();
-        let _ = self.vm().raw_log(log.topics(), &log.data);
-
-        Ok(())
-    }
-
-    pub fn withdraw_eth(&mut self, amount: U256) -> Result<(), AgentVaultError> {
-        self.reentrancy_guard_enter()?;
-        let caller = self.vm().msg_sender();
-
-        if amount == U256::ZERO {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::ZeroAmount(ZeroAmount {}));
-        }
-
-        let current_bal = self.balances.getter(caller).getter(Address::ZERO).get();
-        let new_bal = current_bal
-            .checked_sub(amount)
-            .ok_or(AgentVaultError::InsufficientBalance(InsufficientBalance {}))?;
-
-        self.balances.setter(caller).setter(Address::ZERO).set(new_bal);
-
-        let transfer_res = stylus_sdk::call::transfer::transfer_eth(self.vm(), caller, amount);
-        self.reentrancy_guard_exit();
-
-        if transfer_res.is_err() {
-            return Err(AgentVaultError::ExternalCallFailed(ExternalCallFailed {}));
-        }
-
-        let event = Withdraw {
-            user: caller,
-            token: Address::ZERO,
-            amount,
         };
         let log = event.encode_log_data();
         let _ = self.vm().raw_log(log.topics(), &log.data);
@@ -573,112 +613,6 @@ impl AgentVault {
         Ok(())
     }
 
-    pub fn set_token_policy(
-        &mut self,
-        agent: Address,
-        token: Address,
-        allowed: bool,
-        per_trade_cap: U256,
-        daily_cap: U256,
-    ) -> Result<(), AgentVaultError> {
-        self.reentrancy_guard_enter()?;
-        let caller = self.vm().msg_sender();
-        let vault = self.vm().contract_address();
-
-        let (is_active, expiry, epoch) = {
-            let user_sess = self.sessions.getter(caller);
-            let sess = user_sess.getter(agent);
-            (sess.is_active.get(), sess.expiry.get(), sess.epoch.get())
-        };
-
-        if !is_active {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::SessionKeyInactive(SessionKeyInactive {}));
-        }
-        let current_time = U256::from(self.vm().block_timestamp());
-        if current_time >= expiry {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::SessionKeyExpired(SessionKeyExpired {}));
-        }
-        if token == Address::ZERO || token == vault || token == agent {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::InvalidToken(InvalidToken {}));
-        }
-
-        let ad_key = get_adapter_key(caller, agent, epoch, token);
-        if self.allowed_adapters.getter(ad_key).get() {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::InvalidToken(InvalidToken {}));
-        }
-
-        let pol_key = get_policy_key(caller, agent, epoch, token);
-        if allowed {
-            if per_trade_cap == U256::ZERO || daily_cap == U256::ZERO || per_trade_cap > daily_cap {
-                self.reentrancy_guard_exit();
-                return Err(AgentVaultError::InvalidCap(InvalidCap {}));
-            }
-            let cur_bucket = self.token_policies.getter(pol_key).bucket.get();
-            let cur_ts = self.token_policies.getter(pol_key).bucket_ts.get();
-            let old_d_cap = self.token_policies.getter(pol_key).daily_cap.get();
-            let avail = RiskEngine::calc_available(old_d_cap, cur_bucket, cur_ts, current_time);
-
-            let mut pol = self.token_policies.setter(pol_key);
-            pol.allowed.set(true);
-            pol.per_trade_cap.set(per_trade_cap);
-            pol.daily_cap.set(daily_cap);
-            pol.bucket.set(if avail > daily_cap { daily_cap } else { avail });
-            pol.bucket_ts.set(current_time);
-        } else {
-            self.token_policies.setter(pol_key).allowed.set(false);
-        }
-
-        self.reentrancy_guard_exit();
-        Ok(())
-    }
-
-    pub fn set_adapter(
-        &mut self,
-        agent: Address,
-        adapter: Address,
-        allowed: bool,
-    ) -> Result<(), AgentVaultError> {
-        self.reentrancy_guard_enter()?;
-        let caller = self.vm().msg_sender();
-        let vault = self.vm().contract_address();
-
-        let (is_active, expiry, epoch) = {
-            let user_sess = self.sessions.getter(caller);
-            let sess = user_sess.getter(agent);
-            (sess.is_active.get(), sess.expiry.get(), sess.epoch.get())
-        };
-
-        if !is_active {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::SessionKeyInactive(SessionKeyInactive {}));
-        }
-        let current_time = U256::from(self.vm().block_timestamp());
-        if current_time >= expiry {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::SessionKeyExpired(SessionKeyExpired {}));
-        }
-        if adapter == Address::ZERO || adapter == vault || adapter == agent {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::InvalidAdapter(InvalidAdapter {}));
-        }
-
-        let pol_key = get_policy_key(caller, agent, epoch, adapter);
-        if self.token_policies.getter(pol_key).allowed.get() {
-            self.reentrancy_guard_exit();
-            return Err(AgentVaultError::InvalidAdapter(InvalidAdapter {}));
-        }
-
-        let ad_key = get_adapter_key(caller, agent, epoch, adapter);
-        self.allowed_adapters.setter(ad_key).set(allowed);
-
-        self.reentrancy_guard_exit();
-        Ok(())
-    }
-
     pub fn revoke_session_key(&mut self, agent: Address) -> Result<(), AgentVaultError> {
         self.reentrancy_guard_enter()?;
         let caller = self.vm().msg_sender();
@@ -706,6 +640,51 @@ impl AgentVault {
         let log = event.encode_log_data();
         let _ = self.vm().raw_log(log.topics(), &log.data);
 
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------
+    // Oracle floor configuration (per user — there is no admin key)
+    // -----------------------------------------------------------------
+
+    /// Point `token` at a Chainlink-shaped price feed for the caller's cage.
+    /// `feed == 0` removes it. The floor is enforced only when both tokens
+    /// of a trade have a feed.
+    pub fn set_price_feed(&mut self, token: Address, feed: Address) -> Result<(), AgentVaultError> {
+        if token == Address::ZERO {
+            return Err(AgentVaultError::ZeroAddress(ZeroAddress {}));
+        }
+        let caller = self.vm().msg_sender();
+        self.price_feeds.setter(caller).setter(token).set(feed);
+        let event = PriceFeedUpdated { user: caller, token, feed };
+        let log = event.encode_log_data();
+        let _ = self.vm().raw_log(log.topics(), &log.data);
+        Ok(())
+    }
+
+    /// L2 sequencer uptime feed for the caller's cage. `0` disables the check.
+    pub fn set_sequencer_feed(&mut self, feed: Address) -> Result<(), AgentVaultError> {
+        let caller = self.vm().msg_sender();
+        self.sequencer_feeds.setter(caller).set(feed);
+        let event = SequencerFeedUpdated { user: caller, feed };
+        let log = event.encode_log_data();
+        let _ = self.vm().raw_log(log.topics(), &log.data);
+        Ok(())
+    }
+
+    /// Max slippage the floor tolerates for `agent`, in bps (≤ 5000). `0` = default 500.
+    pub fn set_session_slippage(&mut self, agent: Address, max_slippage_bps: U256) -> Result<(), AgentVaultError> {
+        if agent == Address::ZERO {
+            return Err(AgentVaultError::ZeroAddress(ZeroAddress {}));
+        }
+        if max_slippage_bps > U256::from(5000u64) {
+            return Err(AgentVaultError::InvalidCap(InvalidCap {}));
+        }
+        let caller = self.vm().msg_sender();
+        self.session_slippages.setter(caller).setter(agent).set(max_slippage_bps);
+        let event = SessionSlippageUpdated { user: caller, agent, maxSlippageBps: max_slippage_bps };
+        let log = event.encode_log_data();
+        let _ = self.vm().raw_log(log.topics(), &log.data);
         Ok(())
     }
 
@@ -938,6 +917,12 @@ impl AgentVault {
             let epoch = self.sessions.getter(user).getter(agent).epoch.get();
             get_policy_key(user, agent, epoch, token_out)
         };
+
+        // 1c. Oracle price floor (only when the user wired feeds for both tokens)
+        if let Err(e) = self.verify_oracle_floor(user, agent, token_in, token_out, amount_in, min_amount_out) {
+            self.reentrancy_guard_exit();
+            return Err(e);
+        }
 
         // 2. Effects: update user ledger, bucket and guard counters before external call
         {
@@ -1172,6 +1157,15 @@ impl AgentVault {
         let epoch = self.sessions.getter(user).getter(agent).epoch.get();
         self.position_caps.getter(get_policy_key(user, agent, epoch, token)).get()
     }
+
+    /// (price feed for `token`, sequencer feed, slippage bps for `agent`) — all per user.
+    pub fn get_oracle_config(&self, user: Address, agent: Address, token: Address) -> (Address, Address, U256) {
+        (
+            self.price_feeds.getter(user).getter(token).get(),
+            self.sequencer_feeds.getter(user).get(),
+            self.session_slippages.getter(user).getter(agent).get(),
+        )
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -1376,5 +1370,130 @@ mod tests {
             c.set_position_cap(AGENT, TSLA, U256::from(1)),
             Err(AgentVaultError::SessionKeyInactive(_))
         ));
+    }
+
+    // ---------------- oracle floor on the real contract ----------------
+    //
+    // stylus-test 0.10 serves return data from one global buffer holding the
+    // LAST mocked value, whatever call matched. So every external call inside a
+    // transaction sees the same bytes. We use one 160-byte blob that decodes
+    // validly as both latestRoundData() (5 words) and decimals() (first word),
+    // giving equal prices and decimals=1 everywhere. Per-feed asymmetry is
+    // covered by the pure risk_engine tests and the Foundry suite.
+
+    const FEED_IN: Address = address!("00000000000000000000000000000000000fee01");
+    const FEED_OUT: Address = address!("00000000000000000000000000000000000fee02");
+    const SEQ: Address = address!("00000000000000000000000000000000000fee03");
+    const NOW: u64 = MONDAY + 14 * 3600;
+
+    fn sel(sig: &str) -> [u8; 4] {
+        let h = stylus_sdk::crypto::keccak(sig.as_bytes());
+        [h[0], h[1], h[2], h[3]]
+    }
+
+    fn word(x: u64) -> [u8; 32] {
+        U256::from(x).to_be_bytes::<32>()
+    }
+
+    /// Register one blob for every external view the oracle path can issue.
+    fn mock_blob(vm: &TestVM, answer: u64, started_at: u64, updated_at: u64) {
+        let mut blob = alloc::vec::Vec::new();
+        for w in [word(1), word(answer), word(started_at), word(updated_at), word(1)] {
+            blob.extend_from_slice(&w);
+        }
+        for to in [FEED_IN, FEED_OUT, SEQ, AAPL, TSLA] {
+            for sig in ["latestRoundData()", "decimals()"] {
+                vm.mock_static_call(to, sel(sig).to_vec(), Ok(blob.clone()));
+            }
+        }
+    }
+
+    fn oracle_setup() -> (TestVM, AgentVault) {
+        let (vm, mut c) = setup();
+        seed_balance(&vm, ALICE, AAPL, 10_000);
+        c.set_price_feed(AAPL, FEED_IN).unwrap();
+        c.set_price_feed(TSLA, FEED_OUT).unwrap();
+        (vm, c)
+    }
+
+    /// Past the oracle, the trade hits the ERC20/adapter calls, which the blob
+    /// cannot satisfy; either failure proves the oracle admitted the trade.
+    fn reached_swap(r: &Result<U256, AgentVaultError>) -> bool {
+        matches!(r, Err(AgentVaultError::ExternalCallFailed(_)) | Err(AgentVaultError::InsufficientOutput(_)))
+    }
+
+    #[test]
+    fn oracle_skipped_when_no_feeds() {
+        let (vm, mut c) = setup();
+        seed_balance(&vm, ALICE, AAPL, 10_000);
+        assert!(reached_swap(&agent_trade(&vm, &mut c, B256::with_last_byte(1))));
+    }
+
+    #[test]
+    fn oracle_feeds_are_per_user() {
+        let (_vm, mut c) = setup();
+        c.set_price_feed(AAPL, FEED_IN).unwrap();
+        let (f, seq, bps) = c.get_oracle_config(ALICE, AGENT, AAPL);
+        assert_eq!((f, seq, bps), (FEED_IN, Address::ZERO, U256::ZERO));
+        // Bob configuring a feed does not touch Alice's cage.
+        let (bob_f, ..) = c.get_oracle_config(address!("0000000000000000000000000000000000000b0b"), AGENT, AAPL);
+        assert_eq!(bob_f, Address::ZERO);
+        c.set_price_feed(AAPL, Address::ZERO).unwrap();
+        assert_eq!(c.get_oracle_config(ALICE, AGENT, AAPL).0, Address::ZERO);
+    }
+
+    #[test]
+    fn oracle_stale_feed_refused() {
+        let (vm, mut c) = oracle_setup();
+        mock_blob(&vm, 200_00000000, NOW - 3601, NOW - 3601);
+        let r = agent_trade(&vm, &mut c, B256::with_last_byte(1));
+        assert!(matches!(r, Err(AgentVaultError::StalePriceFeed(_))), "got {:?}", r);
+        // a zero answer is stale too
+        mock_blob(&vm, 0, NOW, NOW);
+        let r = agent_trade(&vm, &mut c, B256::with_last_byte(1));
+        assert!(matches!(r, Err(AgentVaultError::StalePriceFeed(_))), "got {:?}", r);
+    }
+
+    #[test]
+    fn oracle_sequencer_guard() {
+        let (vm, mut c) = oracle_setup();
+        c.set_sequencer_feed(SEQ).unwrap();
+        // answer 1 = sequencer down
+        mock_blob(&vm, 1, NOW - 10_000, NOW - 10);
+        let r = agent_trade(&vm, &mut c, B256::with_last_byte(1));
+        assert!(matches!(r, Err(AgentVaultError::SequencerDown(_))), "got {:?}", r);
+        // back up, but only for 100 seconds
+        mock_blob(&vm, 0, NOW - 100, NOW - 10);
+        let r = agent_trade(&vm, &mut c, B256::with_last_byte(1));
+        assert!(matches!(r, Err(AgentVaultError::GracePeriodNotOver(_))), "got {:?}", r);
+        // removing the sequencer feed disables the check entirely
+        c.set_sequencer_feed(Address::ZERO).unwrap();
+        mock_blob(&vm, 200_00000000, NOW - 60, NOW - 60);
+        assert!(reached_swap(&agent_trade(&vm, &mut c, B256::with_last_byte(1))));
+    }
+
+    #[test]
+    fn oracle_floor_enforced_with_session_slippage() {
+        let (vm, mut c) = oracle_setup();
+        mock_blob(&vm, 200_00000000, NOW - 60, NOW - 60);
+        // equal prices: 100 in -> 100 out; min 95 clears the default 5% floor
+        assert!(reached_swap(&agent_trade(&vm, &mut c, B256::with_last_byte(1))));
+
+        // tighten to 1%: min 95 < 99 -> refused before the venue is ever called
+        c.set_session_slippage(AGENT, U256::from(100u64)).unwrap();
+        let r = agent_trade(&vm, &mut c, B256::with_last_byte(1));
+        assert!(matches!(r, Err(AgentVaultError::SlippageExceeded(_))), "got {:?}", r);
+
+        // exactly 5% clears again
+        c.set_session_slippage(AGENT, U256::from(500u64)).unwrap();
+        assert!(reached_swap(&agent_trade(&vm, &mut c, B256::with_last_byte(1))));
+    }
+
+    #[test]
+    fn set_session_slippage_validation() {
+        let (_vm, mut c) = setup();
+        assert!(matches!(c.set_session_slippage(AGENT, U256::from(5001u64)), Err(AgentVaultError::InvalidCap(_))));
+        c.set_session_slippage(AGENT, U256::from(5000u64)).unwrap();
+        assert_eq!(c.get_oracle_config(ALICE, AGENT, AAPL).2, U256::from(5000u64));
     }
 }

@@ -46,8 +46,10 @@ contract AgentVaultGuardsTest is Test {
 
         aaplFeed = new MockPriceFeed(8, 200e8, "AAPL / USD");
         tslaFeed = new MockPriceFeed(8, 200e8, "TSLA / USD");
+        vm.startPrank(alice);
         vault.setPriceFeed(address(aapl), address(aaplFeed));
         vault.setPriceFeed(address(tsla), address(tslaFeed));
+        vm.stopPrank();
 
         aapl.mint(alice, 100_000 ether);
         tsla.mint(alice, 100_000 ether);
@@ -382,17 +384,31 @@ contract AgentVaultGuardsTest is Test {
         assertEq(mph, 3);
     }
 
-    function test_SetPriceFeed_OnlyOwner() public {
-        MockPriceFeed evil = new MockPriceFeed(8, 1, "EVIL");
+    /// There is no admin key: a hostile feed configured by someone else never
+    /// touches Alice's cage, and Alice can tighten her own floor per agent.
+    function test_PriceFeeds_ArePerUser() public {
+        MockPriceFeed evil = new MockPriceFeed(8, 1, "EVIL"); // $0.00000001
         vm.prank(stranger);
-        vm.expectRevert(IAgentVault.Unauthorized.selector);
-        vault.setPriceFeed(address(aapl), address(evil));
-        vm.prank(stranger);
-        vm.expectRevert(IAgentVault.Unauthorized.selector);
-        vault.setSequencerFeed(address(evil));
-        vm.prank(stranger);
-        vm.expectRevert(IAgentVault.Unauthorized.selector);
-        vault.setMaxStaleness(1);
+        vault.setPriceFeed(address(tsla), address(evil));
+
+        (address strangerFeed, , ) = vault.getOracleConfig(stranger, agentBot, address(tsla));
+        (address aliceFeed, address aliceSeq, uint256 aliceBps) = vault.getOracleConfig(alice, agentBot, address(tsla));
+        assertEq(strangerFeed, address(evil));
+        assertEq(aliceFeed, address(tslaFeed));
+        assertEq(aliceSeq, address(0));
+        assertEq(aliceBps, 0);
+
+        // Alice's trade still prices against her own feeds: 100 AAPL @200 -> 100 TSLA @200, min 95 clears 5%.
+        assertEq(_trade(100 ether), 100 ether);
+
+        // Alice tightens to 1%: the same order is now refused before the venue is called.
+        vm.prank(alice);
+        vault.setSessionSlippage(agentBot, 100);
+        _expectTradeRevert(IAgentVault.SlippageExceeded.selector, 100 ether);
+
+        vm.prank(alice);
+        vm.expectRevert(IAgentVault.InvalidCap.selector);
+        vault.setSessionSlippage(agentBot, 5001);
     }
 
     // ------------------------------------------------------------------
