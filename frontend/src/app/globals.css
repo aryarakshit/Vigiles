@@ -2,37 +2,399 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------
+   Vigiles — Swiss International, inverted
+   Black board. White type. One green signal. Grid as law.
+   Zero radius, zero shadows; depth comes from pattern.
+------------------------------------------------------------------- */
 :root {
-  --background: #F0F0F0;
-  --foreground: #121212;
+  --page: #000000;
+  --ink: #efede8; /* warm off-white, not clinical */
+  --mute: #0b0b0b;
+  --mute2: #141414;
+  --accent: #2be86f;
+  --accent-deep: #0b6b34;
+}
+
+html {
+  color-scheme: dark;
 }
 
 body {
-  color: #121212;
-  background-color: #F0F0F0;
-  background-image: radial-gradient(rgba(18, 18, 18, 0.08) 1.5px, transparent 1.5px);
-  background-size: 20px 20px;
+  background: var(--page);
+  color: var(--ink);
+  font-family: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-feature-settings: "ss01", "cv11", "tnum";
+  -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
 
-/* Bauhaus Custom scrollbar */
+/* Texture comes from the grid / dot / diagonal patterns on muted surfaces.
+   A full-viewport SVG-filter noise layer was measurably expensive to paint
+   and invisible at the opacity black allows, so it is intentionally absent. */
+
+::selection {
+  background: var(--accent);
+  color: var(--page);
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: #F0F0F0;
-  border-left: 2px solid #121212;
+  background: var(--page);
+  border-left: 1px solid rgba(239, 237, 232, 0.15);
 }
 ::-webkit-scrollbar-thumb {
-  background: #121212;
+  background: var(--ink);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #D02020;
+  background: var(--accent);
 }
 
-.clip-triangle {
-  clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
+@layer components {
+  /* ---------- patterns (white on black, never on accent) ---------- */
+  .swiss-grid-pattern {
+    background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .swiss-dots {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.09) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+  .swiss-diagonal {
+    background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 10px);
+  }
+  .swiss-diagonal-accent {
+    background-image: repeating-linear-gradient(45deg, rgba(43, 232, 111, 0.18) 0 1px, transparent 1px 10px);
+  }
 
+  /* ---------- typography ---------- */
+  .display {
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: -0.04em;
+    line-height: 0.9;
+  }
+  .h {
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    line-height: 1.1;
+  }
+  .label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: rgba(239, 237, 232, 0.55);
+  }
+  .idx {
+    /* numbered section prefix, always in the signal colour */
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--accent);
+  }
+  .num {
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .meta {
+    font-size: 13px;
+    line-height: 1.5;
+    color: rgba(239, 237, 232, 0.6);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- structure ---------- */
+  /* Panels live inside a shared grid: the grid draws the vertical rules,
+     the panel draws only its bottom rule, and the last one in a column
+     leaves it to the footer. */
+  .panel {
+    background: var(--page);
+    border-bottom: 2px solid var(--ink);
+  }
+  .panel:last-child {
+    border-bottom: 0;
+  }
+  .panel-head {
+    display: grid;
+    grid-template-columns: 56px 1fr auto;
+    align-items: stretch;
+    border-bottom: 1px solid rgba(239, 237, 232, 0.2);
+  }
+  .panel-head > .n {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid rgba(239, 237, 232, 0.2);
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+  .panel-head > .t {
+    display: flex;
+    align-items: center;
+    padding: 18px 20px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    font-size: 17px;
+  }
+  .panel-head > .r {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px;
+  }
+
+  /* ---------- buttons: rectangles, inversions, no scale ---------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 0 20px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--page);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background-color 150ms linear, color 150ms linear, border-color 150ms linear;
+  }
+  .btn:hover:not(:disabled) {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--page);
+  }
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--page), 0 0 0 4px var(--accent);
+  }
+  .btn:disabled {
+    cursor: not-allowed;
+    background: transparent;
+    color: rgba(239, 237, 232, 0.35);
+    border-color: rgba(239, 237, 232, 0.2);
+  }
+  .btn-secondary {
+    background: transparent;
+    color: var(--ink);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--page);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--ink);
+    border-color: rgba(239, 237, 232, 0.25);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    border-color: var(--ink);
+    background: transparent;
+    color: var(--accent);
+  }
+  .btn-sm {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+  .btn-lg {
+    min-height: 60px;
+    font-size: 15px;
+    padding: 0 28px;
+  }
+
+  /* ---------- inputs: boxes with thick borders, focus snaps to accent ---------- */
+  .field {
+    width: 100%;
+    background: var(--mute2);
+    border: 1px solid rgba(239, 237, 232, 0.35);
+    color: var(--ink);
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    padding: 11px 12px;
+    outline: none;
+    transition: border-color 150ms linear;
+  }
+  .field::placeholder {
+    color: rgba(239, 237, 232, 0.35);
+  }
+  .field:focus {
+    border-color: var(--accent);
+  }
+  .field:disabled {
+    color: rgba(239, 237, 232, 0.3);
+    border-color: rgba(239, 237, 232, 0.15);
+    background: transparent;
+  }
+  select.field {
+    appearance: none;
+    padding-right: 36px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1 L6 6 L11 1' fill='none' stroke='white' stroke-width='2'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+  input[type="time"].field::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+  }
+
+  /* ---------- toggles: squares that invert ---------- */
+  .toggle {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    min-height: 40px;
+    padding: 0 10px;
+    border: 1px solid rgba(239, 237, 232, 0.35);
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 150ms linear, color 150ms linear;
+  }
+  .toggle:hover {
+    color: var(--accent);
+  }
+  .toggle-on {
+    background: var(--ink);
+    color: var(--page);
+  }
+  .toggle-on:hover {
+    color: var(--page);
+    background: var(--accent);
+  }
+  .checkbox {
+    width: 22px;
+    height: 22px;
+    border: 1px solid rgba(239, 237, 232, 0.5);
+    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 150ms linear;
+  }
+  .checkbox-on {
+    background: var(--ink);
+  }
+  .checkbox-on {
+    border-color: var(--ink);
+  }
+  .checkbox-on::after {
+    content: "";
+    width: 10px;
+    height: 10px;
+    background: var(--page);
+  }
+
+  /* ---------- geometric status marks ---------- */
+  .mark {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    flex: none;
+  }
+  .mark-ok {
+    border: 1.5px solid var(--ink);
+  }
+  .mark-block {
+    background: var(--accent);
+  }
+  .mark-warn {
+    width: 0;
+    height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-bottom: 12px solid var(--ink);
+  }
+  .mark-idle {
+    border: 1px dashed rgba(239, 237, 232, 0.4);
+  }
+
+  /* ---------- 24-hour strip ---------- */
+  .hours {
+    display: grid;
+    grid-template-columns: repeat(24, minmax(0, 1fr));
+    gap: 2px;
+  }
+  .hours > div {
+    height: 16px;
+    background: var(--mute2);
+  }
+  .hours > div.on {
+    background: var(--ink);
+  }
+  .hours > div.now {
+    background: var(--accent);
+  }
+
+  /* ---------- table rows ---------- */
+  .row {
+    display: grid;
+    grid-template-columns: 12px 48px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 20px;
+    border-bottom: 1px solid rgba(239, 237, 232, 0.12);
+    font-size: 14px;
+    transition: background-color 150ms linear;
+  }
+  .row:last-child {
+    border-bottom: 0;
+  }
+  .row:hover {
+    background: var(--mute);
+  }
+  .row-block {
+    box-shadow: inset 3px 0 0 0 var(--accent);
+  }
+
+  /* ---------- toasts ---------- */
+  .toast {
+    background: var(--mute2);
+    border: 1px solid rgba(239, 237, 232, 0.35);
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 12px 1fr auto;
+    gap: 12px;
+    align-items: start;
+    font-size: 14px;
+  }
+  .toast-block {
+    border-color: var(--accent);
+    box-shadow: inset 3px 0 0 0 var(--accent);
+  }
+
+  a.link {
+    color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    text-decoration-thickness: 1px;
+    transition: color 150ms linear;
+  }
+  a.link:hover {
+    color: var(--accent);
+  }
+}

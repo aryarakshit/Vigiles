@@ -2,78 +2,94 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-  solidity-reference:
-    name: Foundry Contracts Test & Invariants
+  contracts:
+    name: Foundry — reference vault, guardrails, hostile adapters, invariants
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: contracts
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
+      - run: forge build --sizes
+      - run: forge test -vv
 
-      - name: Build contracts
-        run: forge build --sizes
-
-      - name: Run unit & invariant test suite
-        run: forge test -vvv
-
-  stylus-wasm:
-    name: Stylus Rust WASM Vault (Unit, Invariants, Clippy)
+  stylus:
+    name: Stylus — risk engine + TestVM tests, clippy, size-checked WASM
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: agent-shield-vault
+        working-directory: vigiles-vault
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - name: Rust nightly (build-std needs rust-src)
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
-
-      - name: Cargo Unit Tests (Pure Risk Engine)
-        run: cargo test --lib -- risk_engine
-
-      - name: Cargo Clippy (-D warnings)
+          components: clippy, rustfmt, rust-src
+      - name: Unit tests (pure risk engine + TestVM against the real contract)
+        run: cargo test --lib
+      - name: Clippy on the wasm target
         run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
-
-      - name: Check WASM compilation
-        run: cargo build --target wasm32-unknown-unknown --release
+      - name: Build WASM (panic=immediate-abort via .cargo/config.toml)
+        run: cargo build --release --target wasm32-unknown-unknown
+      - name: Enforce Stylus size limits (128 KiB raw, 24 KiB brotli)
+        run: |
+          pip install brotli --quiet
+          python - <<'PY'
+          import brotli, sys
+          raw = open('target/wasm32-unknown-unknown/release/vigiles_vault.wasm','rb').read()
+          br = brotli.compress(raw, quality=11, lgwin=22)
+          print(f"raw={len(raw)} brotli={len(br)}")
+          assert len(raw) <= 128*1024, "uncompressed WASM over 128 KiB"
+          assert len(br) <= 24*1024, "compressed WASM over 24 KiB (EIP-170)"
+          PY
+      - name: ABI export matches committed interface
+        run: |
+          cargo run --features export-abi | sed 's/^interface IAgentVault {/interface IAgentVaultStylus {/' > /tmp/abi.sol
+          tail -n +7 ../contracts/src/IAgentVaultStylus.sol | diff - /tmp/abi.sol
 
   frontend:
-    name: Next.js Frontend Verification
+    name: Next.js — typecheck + production build
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: frontend/package.json
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Build and Lint
-        run: npm run build
+  mcp:
+    name: MCP server — typecheck + handshake
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npx tsc --noEmit
+      - name: initialize + tools/list over stdio
+        run: |
+          (echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'; \
+           echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; \
+           echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 6) | timeout 40 npx tsx server.ts | grep -q vigiles_execute_trade

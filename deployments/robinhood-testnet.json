@@ -1,0 +1,17 @@
+{
+  "_comment": "Single source of truth for deployed addresses. Written by scripts/deploy_mocks.sh and scripts/deploy_stylus.sh; read by the frontend and the MCP server. Null means not yet deployed.",
+  "chainId": 46630,
+  "chainName": "Robinhood Chain Testnet",
+  "rpcUrl": "https://rpc.testnet.chain.robinhood.com",
+  "explorerUrl": "https://explorer.testnet.chain.robinhood.com",
+  "agentVault": null,
+  "agentVaultDeployTx": null,
+  "swapAdapter": null,
+  "tokens": {
+    "AAPL": null,
+    "TSLA": null,
+    "NVDA": null
+  },
+  "deployer": null,
+  "deployedAt": null
+}

@@ -138,7 +138,7 @@ contract AgentVaultTest is Test {
 
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.SessionKeyInactive.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_RecreatingSessionKeyWipesOldWhitelistViaEpoch() public {
@@ -188,10 +188,10 @@ contract AgentVaultTest is Test {
 
         // Drain DAILY_CAP (2000 ether) in 4 trades of 500 ether
         vm.startPrank(agentBot);
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
 
         // Bucket is now 0
         (, , , uint256 avail0) = vault.getTokenPolicy(alice, agentBot, address(aapl));
@@ -206,11 +206,11 @@ contract AgentVaultTest is Test {
         assertEq(avail6h, 500 ether);
 
         // Can execute 1 trade of 500 ether
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
 
         // Now bucket is 0 again, cannot execute another immediate trade
         vm.expectRevert(IAgentVault.DailyLimitExceeded.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 1 ether, 1 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 1 ether, 1 ether, address(adapter), keccak256("intent"), "");
         vm.stopPrank();
     }
 
@@ -228,6 +228,7 @@ contract AgentVaultTest is Test {
             400 ether,
             380 ether,
             address(adapter),
+            keccak256("intent"),
             ""
         );
 
@@ -245,7 +246,7 @@ contract AgentVaultTest is Test {
 
         vm.prank(maliciousBot);
         vm.expectRevert(IAgentVault.SessionKeyInactive.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_ExecuteTrade_RevertsOnExpiredSession() public {
@@ -256,7 +257,7 @@ contract AgentVaultTest is Test {
 
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.SessionKeyExpired.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_ExecuteTrade_RevertsOnNonWhitelistedTokenOut() public {
@@ -266,7 +267,7 @@ contract AgentVaultTest is Test {
         // NVDA is not whitelisted
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.TokenNotAllowed.selector);
-        vault.executeTrade(alice, address(aapl), address(nvda), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(nvda), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_ExecuteTrade_RevertsOnPerTradeCapExceeded() public {
@@ -276,7 +277,7 @@ contract AgentVaultTest is Test {
         // Cap is 500 ether; agent tries 501 ether
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.SpendLimitExceeded.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 501 ether, 490 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 501 ether, 490 ether, address(adapter), keccak256("intent"), "");
     }
 
     // --- 5. Hostile Adapter Tests ---
@@ -291,7 +292,7 @@ contract AgentVaultTest is Test {
         vm.prank(agentBot);
         // InsufficientOutput because vault received 0 output!
         vm.expectRevert(IAgentVault.InsufficientOutput.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
 
         // Alice balances remain completely untouched
         assertEq(vault.getBalance(alice, address(aapl)), 1000 ether);
@@ -307,7 +308,7 @@ contract AgentVaultTest is Test {
         vm.prank(agentBot);
         // Greedy tries to pull 2x amountIn -> reverts on allowance or OverSpent
         vm.expectRevert();
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_HostileAdapter_Reentrant_Reverts() public {
@@ -319,7 +320,7 @@ contract AgentVaultTest is Test {
         vm.prank(agentBot);
         // Reentrancy detected during adapter callback -> ReentrancyError
         vm.expectRevert(IAgentVault.ReentrancyError.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_HostileAdapter_PartialFill_RefundsUnspentInputAndBucket() public {
@@ -339,6 +340,7 @@ contract AgentVaultTest is Test {
             100 ether,
             75 ether,
             address(adapter),
+            keccak256("intent"),
             ""
         );
 
@@ -361,7 +363,7 @@ contract AgentVaultTest is Test {
         vm.prank(agentBot);
         // Stingy returns dust (1 wei) < minAmountOut -> InsufficientOutput
         vm.expectRevert(IAgentVault.InsufficientOutput.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     // --- 6. v1 Exploit Regressions ---
@@ -378,7 +380,7 @@ contract AgentVaultTest is Test {
         // Calling trade with unapproved adapter reverts with AdapterNotAllowed
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.AdapterNotAllowed.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(aapl), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(aapl), keccak256("intent"), "");
 
         assertEq(aapl.balanceOf(address(vault)), 1000 ether);
     }
@@ -392,7 +394,7 @@ contract AgentVaultTest is Test {
         // Agent tries to trade NVDA (not whitelisted)
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.TokenNotAllowed.selector);
-        vault.executeTrade(alice, address(nvda), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(nvda), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_ExploitRegression_DoubleSpendAt24hWindowEdgeFails() public {
@@ -401,10 +403,10 @@ contract AgentVaultTest is Test {
 
         // Max out daily cap (2000 ether) at t0
         vm.startPrank(agentBot);
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
 
         // Warp to t0 + 86399 (1 second before 24h)
         vm.warp(block.timestamp + 86399);
@@ -413,14 +415,14 @@ contract AgentVaultTest is Test {
 
         // In v2 (token bucket), at t0+86399 it has refilled ~1999.97 ether.
         // If agent tries to burst 2000 + 500, it cannot exceed the linear available limit!
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), "");
-        vault.executeTrade(alice, address(aapl), address(tsla), 499 ether, 490 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 500 ether, 490 ether, address(adapter), keccak256("intent"), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 499 ether, 490 ether, address(adapter), keccak256("intent"), "");
 
         // Cannot trade again without more time elapsed
         vm.expectRevert(IAgentVault.DailyLimitExceeded.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
         vm.stopPrank();
     }
 
@@ -435,7 +437,7 @@ contract AgentVaultTest is Test {
 
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.StalePriceFeed.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_OracleGuard_SequencerDownReverts() public {
@@ -447,7 +449,7 @@ contract AgentVaultTest is Test {
 
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.SequencerDown.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_OracleGuard_SequencerGracePeriodReverts() public {
@@ -459,7 +461,7 @@ contract AgentVaultTest is Test {
 
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.GracePeriodNotOver.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 95 ether, address(adapter), keccak256("intent"), "");
     }
 
     function test_OracleGuard_MinAmountOutBelowFloorReverts() public {
@@ -471,6 +473,6 @@ contract AgentVaultTest is Test {
         // If agent specifies minAmountOut = 90 TSLA (< 95 floor), it must revert!
         vm.prank(agentBot);
         vm.expectRevert(IAgentVault.SlippageExceeded.selector);
-        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 90 ether, address(adapter), "");
+        vault.executeTrade(alice, address(aapl), address(tsla), 100 ether, 90 ether, address(adapter), keccak256("intent"), "");
     }
 }

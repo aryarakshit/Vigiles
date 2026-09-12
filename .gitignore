@@ -33,3 +33,7 @@ Thumbs.db
 mem.json
 .md/
 Temp/
+
+# Local tooling
+.claude/
+frontend/tsconfig.tsbuildinfo

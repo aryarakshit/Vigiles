@@ -119,6 +119,7 @@ contract AgentVaultHandler is Test {
             amountIn,
             minOut,
             address(adapter),
+            keccak256("intent"),
             ""
         ) {
             ghost_successfulTrades++;

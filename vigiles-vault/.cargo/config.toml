@@ -1,0 +1,16 @@
+# Vigiles Stylus build configuration.
+#
+# The vault must fit Stylus' on-chain limits: 128 KiB uncompressed WASM and a
+# 24 KiB brotli-compressed contract (EIP-170). Rust's default panic path keeps
+# ~10 KiB of `core::fmt` alive through function pointers; building `core`
+# with the `immediate-abort` panic strategy removes it entirely.
+#
+# Requires nightly: `rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown`
+# Build:            `cargo +nightly build --release --target wasm32-unknown-unknown`
+# Host-side `cargo test` / `cargo clippy` (no --target) are unaffected and work on stable.
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[target.wasm32-unknown-unknown]
+rustflags = ["-Zunstable-options", "-Cpanic=immediate-abort"]

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 /// @title ISwapAdapter
-/// @notice Interface for all allowlisted swap adapters in AgentShield Vault v2.
+/// @notice Interface for all allowlisted swap adapters in Vigiles Vault v2.
 /// @dev The vault never forwards raw calldata to arbitrary DEXes. All swaps
 /// must implement this interface and be allowlisted per-session by the vault owner.
 interface ISwapAdapter {

@@ -1,15 +1,17 @@
 {
-  "name": "agent-shield-mcp",
-  "version": "1.0.0",
-  "description": "Model Context Protocol (MCP) server for AgentShield on Robinhood Chain",
+  "name": "vigiles-mcp",
+  "version": "3.0.0",
+  "description": "MCP server that gives an AI agent a session key to the Vigiles vault on Robinhood Chain — hard on-chain limits, mandatory intent receipts.",
   "type": "module",
   "main": "server.ts",
   "scripts": {
-    "start": "tsx server.ts"
+    "start": "tsx server.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1",
-    "viem": "^2.21.34"
+    "viem": "^2.21.34",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.16.11",
